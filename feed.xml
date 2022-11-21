@@ -1,0 +1,2936 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+<link href="https://matklad.github.io/feed.xml" rel="self" type="application/atom+xml"/>
+<link href="https://matklad.github.io" rel="alternate" type="text/html"/>
+<updated>2022-11-21T16:48:24.935Z</updated>
+<id>https://matklad.github.io/feed.xml</id>
+<title type="html">matklad</title>
+<subtitle>Yet another programming blog by Alex Kladov aka matklad.</subtitle>
+<author><name>Alex Kladov</name></author>
+
+<entry>
+<title type="html">If a Tree Falls in a Forest, Does It Overflow the Stack?</title>
+<link href="https://matklad.github.io/2022/11/18/if-a-tree-falls-in-a-forest-does-it-overflow-the-stack.html" rel="alternate" type="text/html" title="Self Modifying Code" />
+<published>2022-11-18T00:00:00+00:00</published>
+<updated>2022-11-18T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2022/11/18/if-a-tree-falls-in-a-forest-does-it-overflow-the-stack</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[A well-known pitfall when implementing a linked list in Rust is that the the default recursive <code>drop</code> implementation causes stack overflow for long lists.
+A similar problem exists for tree data structures as well.
+This post describes a couple of possible solutions for trees.
+This is a rather esoteric problem, so the article is denser than is appropriate for a tutorial.]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2022/11/18/if-a-tree-falls-in-a-forest-does-it-overflow-the-stack.html"><![CDATA[
+<h1 id="If-a-Tree-Falls-in-a-Forest-Does-It-Overflow-the-Stack">
+<a href="#If-a-Tree-Falls-in-a-Forest-Does-It-Overflow-the-Stack">If a Tree Falls in a Forest, Does It Overflow the Stack? <time datetime="2022-11-18">Nov 18, 2022</time></a>
+</h1>
+
+<p>A well-known pitfall when implementing a linked list in Rust is that the the default recursive <code>drop</code> implementation causes stack overflow for long lists.
+A similar problem exists for tree data structures as well.
+This post describes a couple of possible solutions for trees.
+This is a rather esoteric problem, so the article is denser than is appropriate for a tutorial.</p>
+
+<p>Let’s start with our beloved linked list:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">Node</span>&lt;T&gt; {</code>
+<code>  value: T,</code>
+<code>  next: <span class="hl-type">Option</span>&lt;<span class="hl-type">Box</span>&lt;Node&lt;T&gt;&gt;&gt;,</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">impl</span>&lt;T&gt; Node&lt;T&gt; {</code>
+<code>  <span class="hl-keyword">fn</span> <span class="hl-title function_">new</span>(value: T) <span class="hl-punctuation">-&gt;</span> Node&lt;T&gt; {</code>
+<code>    Node { value, next: <span class="hl-literal">None</span> }</code>
+<code>  }</code>
+<code>  <span class="hl-keyword">fn</span> <span class="hl-title function_">with_next</span>(<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>, next: Node&lt;T&gt;) <span class="hl-punctuation">-&gt;</span> Node&lt;T&gt; {</code>
+<code>    <span class="hl-keyword">self</span>.next = <span class="hl-title function_ invoke__">Some</span>(<span class="hl-type">Box</span>::<span class="hl-title function_ invoke__">new</span>(next));</code>
+<code>    <span class="hl-keyword">self</span></code>
+<code>  }</code>
+<code>}</code></pre>
+
+</figure>
+<p>It’s easy to cause this code to crash:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-meta">#[test]</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">stack_overflow</span>() {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">node</span> = Node::<span class="hl-title function_ invoke__">new</span>(<span class="hl-number">0</span>);</code>
+<code>  <span class="hl-keyword">for</span> <span class="hl-variable">_</span> <span class="hl-keyword">in</span> <span class="hl-number">0</span>..<span class="hl-number">100_000</span> {</code>
+<code>    node = Node::<span class="hl-title function_ invoke__">new</span>(<span class="hl-number">0</span>).<span class="hl-title function_ invoke__">with_next</span>(node);</code>
+<code>  }</code>
+<code>  <span class="hl-title function_ invoke__">drop</span>(node) <span class="hl-comment">// boom</span></code>
+<code>}</code></pre>
+
+</figure>
+<p>The crash happens in the automatically generated recursive <code>drop</code> function.
+The fix is to write <code>drop</code> manually, in a non-recursive way:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">impl</span>&lt;T&gt; <span class="hl-built_in">Drop</span> <span class="hl-keyword">for</span> <span class="hl-title class_">Node</span>&lt;T&gt; {</code>
+<code>  <span class="hl-keyword">fn</span> <span class="hl-title function_">drop</span>(&amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>) {</code>
+<code>    <span class="hl-keyword">while</span> <span class="hl-keyword">let</span> <span class="hl-variable">Some</span>(next) = <span class="hl-keyword">self</span>.next.<span class="hl-title function_ invoke__">take</span>() {</code>
+<code>      *<span class="hl-keyword">self</span> = *next;</code>
+<code>    }</code>
+<code>  }</code>
+<code>}</code></pre>
+
+</figure>
+<p>What about trees?</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">Node</span>&lt;T&gt; {</code>
+<code>  value: T,</code>
+<code>  left: <span class="hl-type">Option</span>&lt;<span class="hl-type">Box</span>&lt;Node&lt;T&gt;&gt;&gt;,</code>
+<code>  right: <span class="hl-type">Option</span>&lt;<span class="hl-type">Box</span>&lt;Node&lt;T&gt;&gt;&gt;,</code>
+<code>}</code></pre>
+
+</figure>
+<p>If the tree is guaranteed to be balanced, the automatically generated drop is actually fine, because the height of the tree will be logarithmic.
+If the tree is unbalanced though, the same stack overflow might happen.</p>
+
+<p>Let’s write an iterative <code>Drop</code> to fix this.
+The problem though is that the “swap with <code>self</code>” trick we used for list doesn’t work, as we have two children to recur into.
+The standard solution would be to replace a stack with an explicit vector of work times:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">impl</span>&lt;T&gt; <span class="hl-built_in">Drop</span> <span class="hl-keyword">for</span> <span class="hl-title class_">Node</span>&lt;T&gt; {</code>
+<code>  <span class="hl-keyword">fn</span> <span class="hl-title function_">drop</span>(&amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>) {</code>
+<code>    <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">work</span> = <span class="hl-type">Vec</span>::<span class="hl-title function_ invoke__">new</span>();</code>
+<code>    work.<span class="hl-title function_ invoke__">extend</span>(<span class="hl-keyword">self</span>.left.<span class="hl-title function_ invoke__">take</span>());</code>
+<code>    work.<span class="hl-title function_ invoke__">extend</span>(<span class="hl-keyword">self</span>.right.<span class="hl-title function_ invoke__">take</span>());</code>
+<code>    <span class="hl-keyword">while</span> <span class="hl-keyword">let</span> <span class="hl-variable">Some</span>(node) = work.<span class="hl-title function_ invoke__">pop</span>() {</code>
+<code>      work.<span class="hl-title function_ invoke__">extend</span>(node.left.<span class="hl-title function_ invoke__">take</span>());</code>
+<code>      work.<span class="hl-title function_ invoke__">extend</span>(node.right.<span class="hl-title function_ invoke__">take</span>());</code>
+<code>    }</code>
+<code>  }</code>
+<code>}</code></pre>
+
+</figure>
+<p>This works, but also makes my internal C programmer scream: we allocate a vector to free memory!
+Can we do better?</p>
+
+<p>One approach would be to build on balanced trees observation.
+If we recur into the shorter branch, and iteratively drop the longer one, we should be fine:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">impl</span>&lt;T&gt; <span class="hl-built_in">Drop</span> <span class="hl-keyword">for</span> <span class="hl-title class_">Node</span>&lt;T&gt; {</code>
+<code>  <span class="hl-keyword">fn</span> <span class="hl-title function_">drop</span>(&amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>) {</code>
+<code>    <span class="hl-keyword">loop</span> {</code>
+<code>      <span class="hl-title function_ invoke__">match</span> (<span class="hl-keyword">self</span>.left.<span class="hl-title function_ invoke__">take</span>(), <span class="hl-keyword">self</span>.right.<span class="hl-title function_ invoke__">take</span>()) {</code>
+<code>        (<span class="hl-literal">None</span>, <span class="hl-literal">None</span>) =&gt; <span class="hl-keyword">break</span>,</code>
+<code>        (<span class="hl-literal">None</span>, <span class="hl-title function_ invoke__">Some</span>(it)) | (<span class="hl-title function_ invoke__">Some</span>(it), <span class="hl-literal">None</span>) =&gt; *<span class="hl-keyword">self</span> = *it,</code>
+<code>        (<span class="hl-title function_ invoke__">Some</span>(left), <span class="hl-title function_ invoke__">Some</span>(right)) =&gt; {</code>
+<code>          *<span class="hl-keyword">self</span> =</code>
+<code>            *<span class="hl-keyword">if</span> left.depth &gt; right.depth { left } <span class="hl-keyword">else</span> { right }</code>
+<code>        }</code>
+<code>      }</code>
+<code>    }</code>
+<code>  }</code>
+<code>}</code></pre>
+
+</figure>
+<p>This requires maintaining the depths though.
+Can we make do without?
+My C instinct (not that I wrote any substantial amount of C though) would be to go down the tree, and stash the parent links into the nodes themselves.
+And we actually can do something like that:</p>
+
+<ul >  <li>
+<p>If the current node has only a single child, we can descend into the node</p>
+</li>
+  <li>
+<p>If there are two children, we can rotate the tree. If we always rotate into a
+single direction, eventually we’ll get into the single-child situation.</p>
+</li>
+</ul>
+
+<p>Here’s how a single rotation could look:</p>
+
+<figure>
+<img src="https://user-images.githubusercontent.com/1711539/202797128-87e40cf0-be55-44b3-9bdf-5dc15b33812b.png" alt=""></figure>
+
+<p>Or, in code,</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">impl</span>&lt;T&gt; <span class="hl-built_in">Drop</span> <span class="hl-keyword">for</span> <span class="hl-title class_">Node</span>&lt;T&gt; {</code>
+<code>  <span class="hl-keyword">fn</span> <span class="hl-title function_">drop</span>(&amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>) {</code>
+<code>    <span class="hl-keyword">loop</span> {</code>
+<code>      <span class="hl-title function_ invoke__">match</span> (<span class="hl-keyword">self</span>.left.<span class="hl-title function_ invoke__">take</span>(), <span class="hl-keyword">self</span>.right.<span class="hl-title function_ invoke__">take</span>()) {</code>
+<code>        (<span class="hl-literal">None</span>, <span class="hl-literal">None</span>) =&gt; <span class="hl-keyword">break</span>,</code>
+<code>        (<span class="hl-literal">None</span>, <span class="hl-title function_ invoke__">Some</span>(it)) | (<span class="hl-title function_ invoke__">Some</span>(it), <span class="hl-literal">None</span>) =&gt; *<span class="hl-keyword">self</span> = *it,</code>
+<code>        (<span class="hl-title function_ invoke__">Some</span>(<span class="hl-keyword">mut</span> left), <span class="hl-title function_ invoke__">Some</span>(right)) =&gt; {</code>
+<code>          mem::<span class="hl-title function_ invoke__">swap</span>(<span class="hl-keyword">self</span>, &amp;<span class="hl-keyword">mut</span> *left);</code>
+<code>          left.left = <span class="hl-keyword">self</span>.right.<span class="hl-title function_ invoke__">take</span>();</code>
+<code>          left.right = <span class="hl-title function_ invoke__">Some</span>(right);</code>
+<code>          <span class="hl-keyword">self</span>.right = <span class="hl-title function_ invoke__">Some</span>(left);</code>
+<code>        }</code>
+<code>      }</code>
+<code>    }</code>
+<code>  }</code>
+<code>}</code></pre>
+
+</figure>
+<p>Ok, what if we have an n-ary tree?</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">Node</span>&lt;T&gt; {</code>
+<code>  value: T,</code>
+<code>  children: <span class="hl-type">Vec</span>&lt;Node&lt;T&gt;&gt;,</code>
+<code>}</code></pre>
+
+</figure>
+<p>I <em>think</em> the same approach works: we can treat the first child as <code>left</code>, and the last child as <code>right</code>, and do essentially the same rotations.
+Though, we will rotate in other direction (as removing the right child is cheaper), and we’ll also check that we have at least two grandchildren (to avoid allocation when pushing to an empty vector).</p>
+
+<p>Which gives something like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">impl</span>&lt;T&gt; <span class="hl-built_in">Drop</span> <span class="hl-keyword">for</span> <span class="hl-title class_">Node</span>&lt;T&gt; {</code>
+<code>  <span class="hl-keyword">fn</span> <span class="hl-title function_">drop</span>(&amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>) {</code>
+<code>    <span class="hl-keyword">loop</span> {</code>
+<code>      <span class="hl-keyword">let</span> <span class="hl-variable">Some</span>(<span class="hl-keyword">mut</span> right) = <span class="hl-keyword">self</span>.children.<span class="hl-title function_ invoke__">pop</span>() <span class="hl-keyword">else</span> {</code>
+<code>        <span class="hl-keyword">break</span>;</code>
+<code>      };</code>
+<code>      <span class="hl-keyword">if</span> <span class="hl-keyword">self</span>.children.<span class="hl-title function_ invoke__">is_empty</span>() {</code>
+<code>        *<span class="hl-keyword">self</span> = right;</code>
+<code>        <span class="hl-keyword">continue</span>;</code>
+<code>      }</code>
+<code>      <span class="hl-keyword">if</span> right.children.<span class="hl-title function_ invoke__">len</span>() &lt; <span class="hl-number">2</span> {</code>
+<code>        <span class="hl-keyword">self</span>.children.<span class="hl-title function_ invoke__">extend</span>(right.children.<span class="hl-title function_ invoke__">drain</span>(..));</code>
+<code>        <span class="hl-keyword">continue</span>;</code>
+<code>      }</code>
+<code>      <span class="hl-comment">// Non trivial case:</span></code>
+<code>      <span class="hl-comment">//   &gt;= 2 children,</span></code>
+<code>      <span class="hl-comment">//   &gt;= 2 grandchildren.</span></code>
+<code>      <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">me</span> = mem::<span class="hl-title function_ invoke__">replace</span>(<span class="hl-keyword">self</span>, right);</code>
+<code>      mem::<span class="hl-title function_ invoke__">swap</span>(&amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>.children[<span class="hl-number">0</span>], &amp;<span class="hl-keyword">mut</span> me);</code>
+<code>      <span class="hl-comment">// Doesn&#x27;t allocate, this is the same slot</span></code>
+<code>      <span class="hl-comment">// we popped from at the start of the loop.</span></code>
+<code>      <span class="hl-keyword">self</span>.children[<span class="hl-number">0</span>].children.<span class="hl-title function_ invoke__">push</span>(me);</code>
+<code>    }</code>
+<code>  }</code>
+<code>}</code></pre>
+
+</figure>
+<p>I am not sure this works, and I am not sure this works in linear time, but I am fairly certain that something like this could be made to work if need be.</p>
+
+<p>Though, practically, if something like this is a concern, you probably want to re-design the tree structure to be something like this instead:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">Node</span>&lt;T&gt; {</code>
+<code>  value: T,</code>
+<code>  children: Range&lt;<span class="hl-type">usize</span>&gt;,</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">Tree</span>&lt;T&gt; {</code>
+<code>   nodes: <span class="hl-type">Vec</span>&lt;Node&lt;T&gt;&gt;,</code>
+<code>}</code></pre>
+
+</figure>]]></content>
+</entry>
+
+<entry>
+<title type="html">Accessibility: px or rem?</title>
+<link href="https://matklad.github.io/2022/11/05/accessibility-px-or-rem.html" rel="alternate" type="text/html" title="Self Modifying Code" />
+<published>2022-11-05T00:00:00+00:00</published>
+<updated>2022-11-05T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2022/11/05/accessibility-px-or-rem</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[The genre of this post is: “I am having opinions on something I am not an expert at, so hopefully the Internet would correct me”.]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2022/11/05/accessibility-px-or-rem.html"><![CDATA[
+<h1 id="Accessibility:-px-or-rem">
+<a href="#Accessibility:-px-or-rem">Accessibility: px or rem? <time datetime="2022-11-05">Nov 5, 2022</time></a>
+</h1>
+
+<p>The genre of this post is: “I am having opinions on something I am not an expert at, so hopefully the Internet would correct me”.</p>
+
+<p>The specific question in question is:</p>
+
+<figure class="blockquote">
+<blockquote>
+<p>Should you use <code>px</code> or <code>rem</code> units in your CSS?</p>
+</blockquote>
+
+</figure>
+
+<p>I am not a web developer, but I do have a blog where I write CSS myself, and I very much want to do the right thing.
+I was researching and agonizing over this question for years, as I wasn’t able to find a conclusive argument one way or another.
+So I am writing one.</p>
+
+<p>This isn’t ideal, but I am lazy, so this post assumes that you already did the research and understand the mechanics of and the difference between <code>px</code>, <code>em</code>, and <code>rem</code>.
+And so, you position is probably:</p>
+
+<figure class="blockquote">
+<blockquote>
+<p>Of course <code>rem</code>, because that honors user’s setting for the font-size, and so is more accessible, although …</p>
+</blockquote>
+
+</figure>
+
+<p>Although there are buts:</p>
+
+<p><em>But</em> the default font-size is <code>16px</code>, and that’s just too small.
+If you just roll with intended defaults, than the text will be painful to read even for folks with great vision!</p>
+
+<p><em>But</em> default font-size of <code>x</code> pixels just doesn’t make sense: the actual perceived font size very much depends on the font itself.
+At <code>16px</code>, some fonts will be small, some tiny, and some maybe even just about right.</p>
+
+<p><em>But</em> the recommended way to <em>actually</em> use rem boils down to setting a percentage font-size for the root element, such that <code>1rem</code> is not the intended “font size of the root element”, but is equal to 1px (under default settings).
+Which, at this point, sounds like using pixels, just with more steps?
+After all, the modern browsers can zoom the pixels just fine?</p>
+
+<p>So, yeah, lingering doubts…
+If you are like me, you painstakingly used <code>rem</code>’s everywhere, and then <code>html { font-size: 22px }</code> because default is unusable, and percentage of default is stupidly ugly :-)</p>
+<hr />
+<p>So lets settle the question then.</p>
+
+<p>The practical data we want is what do the users actually do in practice?
+Do they zoom or do they change default font size?
+I have spent 10 minutes googling that, didn’t find the answer.</p>
+
+<p>After that, I decided to just check how it actually works.
+So, I opened browser’s settings, cranked the font size to the max, and opened Google.</p>
+
+<p>To be honest, that was the moment where the question was mentally settled for me.
+If Google’s search page doesn’t respect user-agent’s default font-size, it’s an indirect, but also very strong, evidence that that’s not a meaningful thing to do.</p>
+
+<p>The result of my ad-hoc survey:</p>
+<div class = "two-col">
+<dl >  <dt>Don’t care:</dt>
+  <dd>
+<ul >  <li>
+<p>Google</p>
+</li>
+  <li>
+<p>Lobsters</p>
+</li>
+  <li>
+<p>Hackernews</p>
+</li>
+  <li>
+<p>Substack</p>
+</li>
+  <li>
+<p>antirez.com</p>
+</li>
+  <li>
+<p>tonsky.me</p>
+</li>
+  <li>
+<p>New Reddit</p>
+</li>
+</ul>
+</dd>
+</dl>
+
+<p><br>
+</p>
+
+<dl >  <dt>Embiggen:</dt>
+  <dd>
+<ul >  <li>
+<p>Wikipedia</p>
+</li>
+  <li>
+<p>Discourse</p>
+</li>
+  <li>
+<p>Old Reddit</p>
+</li>
+</ul>
+</dd>
+</dl>
+</div>
+<p>Google versus Wikipedia it is, eh?
+But this is actually quite informative: if you adjust your browser’s default font-size, you are in an “Alice in the Wonderland” version of the web which alternates between too large and too small.</p>
+
+<p>The next useful question is: what about mobile?
+After some testing and googling, it seems that changing browser’s default font-size is just not possible on the iPhone?
+That the only option is page zoom?</p>
+
+<p>Again, I don’t actually have the data on whether users rely on zoom or on font size.
+But so far it looks like the user doesn’t really have a choice?
+Only zoom seems to actually work in practice?</p>
+
+<p>The final bit of evidence which completely settled the question in my mind comes from this post:</p>
+
+<p><a class="url" href="https://www.craigabbott.co.uk/blog/accessibility-and-font-sizes">https://www.craigabbott.co.uk/blog/accessibility-and-font-sizes</a></p>
+
+<p>It tells us that</p>
+
+<figure class="blockquote">
+<blockquote>
+<p>Using the wrong units of measurement in your Cascading Style Sheets (CSS) is a
+big barrier for many visually impaired users, and it can cause your website fail
+the Web Content Accessibility Guidelines (WCAG) 2.1 on
+<a href="https://www.w3.org/WAI/WCAG21/Understanding/resize-text.html">1.4.4 Resize text</a>.</p>
+</blockquote>
+
+</figure>
+
+<p>That WCAG document is really worth the read:</p>
+
+<figure class="blockquote">
+<blockquote>
+<p>The scaling of content is primarily a user agent responsibility. User agents
+that satisfy UAAG 1.0 Checkpoint 4.1 allow users to configure text scale. The
+author’s responsibility is to create Web content that does not prevent the
+user agent from scaling the content effectively. Authors may satisfy this
+Success Criterion by verifying that content does not interfere with user agent
+support for resizing text, including text-based controls, or by providing direct
+support for resizing text or changing the layout. An example of direct support
+might be via server-side script that can be used to assign different style
+sheets.</p>
+
+<p><strong><strong>The author cannot rely on the user agent to satisfy this Success Criterion
+for HTML content if users do not have access to a user agent with zoom support.
+For example, if they work in an environment that requires them to use IE 6.</strong></strong></p>
+
+<p>If the author is using a technology whose user agents do not provide zoom
+support, the author is responsible to provide this type of functionality
+directly or to provide content that works with the type of functionality
+provided by the user agent. If the user agent doesn’t provide zoom functionality
+but does let the user change the text size, the author is responsible for
+ensuring that the content remains usable when the text is resized.</p>
+</blockquote>
+
+</figure>
+
+<p>My reading of the above text: it’s on me, as an author, to ensure that my readers can scale the content using whatever method their user agent employs.
+If the UA can zoom, that’s prefect, we are done.</p>
+
+<p>If the reader’s actual UA can’t zoom, but it can change default font size (eg, IE 6), then I need to support that.</p>
+
+<p>That’s … most reasonable I guess?
+Just make sure that your actual users, in their actual use, can read stuff.
+And I am pretty sure my target audience doesn’t use IE 6, which I don’t support anyway.</p>
+
+<p><strong><strong>TL;DR</strong></strong> for the whole post:</p>
+
+<p>Use pixels.
+The goal is not to check the “I suffered pain to make my website accessible” checkbox, the goal is to make the site accessible to real users.
+There’s an explicit guideline about that.
+There’s a strong evidence that, barring highly unusual circumstances, real users zoom, and pixels zoom just fine.</p>
+<hr />
+<p>As a nice bonus, if you <em><em>don’t</em></em> use rem, you make browser’s font size setting more useful, because it can control the scale of the browser’s own chrome (which is fixed) independently from the scale of websites (which vary).</p>
+]]></content>
+</entry>
+
+<entry>
+<title type="html">Elements Of a Great Markup Language</title>
+<link href="https://matklad.github.io/2022/10/28/elements-of-a-great-markup-language.html" rel="alternate" type="text/html" title="Self Modifying Code" />
+<published>2022-10-28T00:00:00+00:00</published>
+<updated>2022-10-28T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2022/10/28/elements-of-a-great-markup-language</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[This post contains some inconclusive musing on lightweight markup languages (Markdown, AsciiDoc, LaTeX, reStructuredText, etc).
+The overall mood is that I don’t think a genuinely great markup languages exists.
+I wish it did though.
+As an appropriate disclosure, this text is written in AsciiDoctor.]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2022/10/28/elements-of-a-great-markup-language.html"><![CDATA[
+<h1 id="Elements-Of-a-Great-Markup-Language">
+<a href="#Elements-Of-a-Great-Markup-Language">Elements Of a Great Markup Language <time datetime="2022-10-28">Oct 28, 2022</time></a>
+</h1>
+
+<p>This post contains some inconclusive musing on lightweight markup languages (Markdown, AsciiDoc, LaTeX, reStructuredText, etc).
+The overall mood is that I don’t think a genuinely great markup languages exists.
+I wish it did though.
+As an appropriate disclosure, this text is written in AsciiDoctor.</p>
+
+<p>EDIT: if you like this post, you should definitely check out <a class="url" href="https://djot.net">https://djot.net</a>.</p>
+
+<p>EDIT: welp, that escalated quickly, this post is now written in Djot.</p>
+<section>
+<h2 id="Document-Model">
+<a href="#Document-Model">Document Model </a>
+</h2>
+
+<p>This I think is the big one.
+Very often, a particular markup language is married to a particular output format, either syntactically (markdown supports HTML syntax), or by the processor just not making a crisp enough distinction between the input document and the output (AsciiDoctor).</p>
+
+<p>Roughly, if the markup language is for emitting HTML, or PDF, or DocBook XML, that’s bad.
+A good markup language describes an abstract hierarchical structure of the document, and lets a separate program to adapt that structure to the desired output.</p>
+
+<p>More or less, what I want from markup is to convert a text string into a document tree:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">enum</span> <span class="hl-title class_">Element</span> {</code>
+<code>  <span class="hl-title function_ invoke__">Text</span>(<span class="hl-type">String</span>),</code>
+<code>  Node {</code>
+<code>    tag: <span class="hl-type">String</span>,</code>
+<code>    attributes: Map&lt;<span class="hl-type">String</span>, <span class="hl-type">String</span>&gt;</code>
+<code>    children: <span class="hl-type">Vec</span>&lt;Element&gt;,</code>
+<code>  }</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">parse_markup</span>(input: &amp;<span class="hl-type">str</span>) <span class="hl-punctuation">-&gt;</span> Element { ... }</code></pre>
+
+</figure>
+<p>Markup language which nails this perfectly is HTML.
+It directly expresses this tree structure.
+Various viewers for HTML can then render the document in a particular fashion.
+HTML’s syntax itself doesn’t really care about tag names and semantics: you can imagine authoring HTML documents using an alternative set of tag names.</p>
+
+<p>Markup language which completely falls over this is Markdown.
+There’s no way to express generic tree structure, conversion to HTML with specific browser tags is hard-coded.</p>
+
+<p>Language which does this half-good is AsciiDoctor.</p>
+
+<p>In AsciiDoctor, it is possible to express genuine nesting.
+Here’s a bunch of nested blocks with some inline content and attributes:</p>
+
+<figure class="code-block">
+
+
+<pre><code>====</code>
+<code>Here are your options:</code>
+<code></code>
+<code>.Red Pill</code>
+<code>[%collapsible]</code>
+<code>======</code>
+<code>Escape into the real world.</code>
+<code>======</code>
+<code></code>
+<code>.Blue Pill</code>
+<code>[%collapsible]</code>
+<code>======</code>
+<code>Live within the simulated reality without want or fear.</code>
+<code>======</code>
+<code></code>
+<code>====</code></pre>
+
+</figure>
+<p>The problem with AsciiDoctor is that generic blocks come of as a bit of implementation detail, not as a foundation.
+It is difficult to untangle presentation-specific semantics of particular blocks (examples, admonitions, etc) from the generic document structure.
+As a fun consequence, a semantic-neutral block (equivalent of a <code>&lt;/div&gt;</code>) is the only kind of block which can’t actually nest in AsciiDoctor, due to syntactic ambiguity.</p>
+
+<aside class="admn">
+  <i class="fa fa-info-circle"></i>
+  <div>
+<p>Great markup format unambiguously interprets an input string as an abstract tree model of a document.
+It doesn’t ascribe semantics to particular tag names or attributes.</p>
+</div>
+</aside></section><section>
+<h2 id="Concrete-Syntax">
+<a href="#Concrete-Syntax">Concrete Syntax </a>
+</h2>
+
+<p>Syntax matters.
+For lightweight text markup languages, syntax is of utmost importance.</p>
+
+<p>The only right way to spell a list is</p>
+
+<figure class="code-block">
+
+
+<pre><code>- Foo</code>
+<code>- Bar</code>
+<code>- Baz</code></pre>
+
+</figure>
+<p>Not</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-tag">&lt;<span class="hl-name">ul</span>&gt;</span></code>
+<code>    <span class="hl-tag">&lt;<span class="hl-name">li</span>&gt;</span>Foo<span class="hl-tag">&lt;/<span class="hl-name">li</span>&gt;</span></code>
+<code>    <span class="hl-tag">&lt;<span class="hl-name">li</span>&gt;</span>Bar<span class="hl-tag">&lt;/<span class="hl-name">li</span>&gt;</span></code>
+<code>    <span class="hl-tag">&lt;<span class="hl-name">li</span>&gt;</span>Baz<span class="hl-tag">&lt;/<span class="hl-name">li</span>&gt;</span></code>
+<code><span class="hl-tag">&lt;/<span class="hl-name">ul</span>&gt;</span></code></pre>
+
+</figure>
+<p>And most definitely not</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">\begin</span>{itemize}</code>
+<code>    <span class="hl-keyword">\item</span> foo</code>
+<code>    <span class="hl-keyword">\item</span> Bar</code>
+<code>    <span class="hl-keyword">\item</span> Baz</code>
+<code><span class="hl-keyword">\end</span>{itemize}</code></pre>
+
+</figure>
+<p>Similarly, you lose if you spell links like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code>`My Blog &lt;https://matklad.github.io&gt;`_</code></pre>
+
+</figure>
+<p>Markdown is the trailblazer here, it picked a lot of great concrete syntaxes.
+Though, some choices are questionable, like trailing double space rule, or the syntax for including images.</p>
+
+<p>AsciiDoctor is the treasure trove of tasteful syntactic decisions.</p>
+<section>
+<h3 id="Inline-Formatting">
+<a href="#Inline-Formatting">Inline Formatting </a>
+</h3>
+
+<p>For example <code>*bold*</code> is <strong>bold</strong>, <code>_italics_</code> is <em>italics</em>, and repeating the emphasis symbol twice (<code>__like *this*__</code>) allows for <em>unambiguous <strong>nesting</strong></em>.</p>
+</section><section>
+<h3 id="Links">
+<a href="#Links">Links </a>
+</h3>
+
+<p>URls are spelled like this</p>
+
+<figure class="code-block">
+
+
+<pre><code>https://matklad.github.io[My Blog]</code></pre>
+
+</figure>
+<p>And images like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code>image:/media/logo.png[width=640,height=480]</code></pre>
+
+</figure>
+<p>This is a generic syntax:</p>
+
+<figure class="code-block">
+
+
+<pre><code>tag : argument [attributes]</code></pre>
+
+</figure>
+<p>For example <code>[](http://example.com)</code> gets parsed as <code>&lt;http&gt;//example.com&lt;/http&gt;</code>, and the converter knows basic url schemes.
+And of course there’s a generic link syntax for corner cases where a URL syntax isn’t a valid AsciiDoctor syntax:</p>
+
+<figure class="code-block">
+
+
+<pre><code>link:downloads/report.pdf[Get Report]</code></pre>
+
+</figure>
+<p>(<code>image:</code> produces an inline element, while <code>image::</code> emits a block. Again, this <em>isn’t</em> hard-coded to images, it is a generic syntax for <code>whatever::</code>).</p>
+</section><section>
+<h3 id="Lists">
+<a href="#Lists">Lists </a>
+</h3>
+
+<p>Another tasteful decision are numbered lists, which use <code>.</code> to avoid tedious renumbering:</p>
+<div class = "two-col">
+<figure class="code-block">
+
+
+<pre><code>[lowerroman]</code>
+<code>1. One</code>
+<code>2. Two</code>
+<code>3. Three</code></pre>
+
+</figure>
+<ol  type="i">  <li>
+<p>One</p>
+</li>
+  <li>
+<p>Two</p>
+</li>
+  <li>
+<p>Three</p>
+</li>
+</ol>
+</div></section><section>
+<h3 id="Tables">
+<a href="#Tables">Tables </a>
+</h3>
+
+<p>And AsciiDoctor also has a reasonable-ish syntax for tables, with one-line per cell and a blank like to delimit rows.</p>
+<div class = "two-col">
+<figure class="code-block">
+
+
+<pre><code>[cols="1,1"]</code>
+<code>|===</code>
+<code>|First</code>
+<code>|Row</code>
+<code></code>
+<code>|X</code>
+<code>|Y</code>
+<code></code>
+<code>|Last</code>
+<code>|Row</code>
+<code>|===</code></pre>
+
+</figure><table><tr><td>First</td><td>Row</td></tr><tr><td>X</td><td>Y</td></tr><tr><td>Last</td><td>Row</td></tr></table></div><hr />
+<aside class="admn">
+  <i class="fa fa-info-circle"></i>
+  <div>
+<p>Great markup format contains a tasteful selection of syntactic forms to express common patterns:
+lists, admonitions, links, footnotes, cross-references, quotes, tables, images.</p>
+
+<p>The syntax is fundamentally sugary, and expands to the standard tree-of-nodes-with-attributes.</p>
+</div>
+</aside></section></section><section>
+<h2 id="Composable-Processing">
+<a href="#Composable-Processing">Composable Processing </a>
+</h2>
+
+<p>To convert our nice, sweet syntax to general tree and than into the final output, we need some kind of a tool.
+One way to do that is by direct translation from our source document to, eg, html.</p>
+
+<p>Such one-step translation is convenient for all-inclusive tools, but is a barrier for extensibility.
+Amusingly, AsciiDoctor is both a positive and a negative example here.</p>
+
+<p>On the negative side of things, classical AsciiDoctor is an extensible Ruby processor.
+To extend it, you essentially write a “compiler plugin” — a bit of Ruby code which gets hook into the main processor and gets invoked as a callback when certain “tags” are parsed.
+This plugin interacts with the Ruby API of the processor itself, and is tied to a particular toolchain.</p>
+
+<p>In contrast, asciidoctor-web, a newer thing (which non-the-less uses the same Ruby core), approaches the task a bit differently.
+There’s no API to extend the processor itself.
+Rather, the processor produces an abstract document tree, and then a user-supplied JavaScript function can convert that <em><em>piece of data</em></em> into whatever html it needs, by following a lightweight visitor pattern.
+I think this is the key to a rich ecosystem:  strictly separate converting input text to an abstract document model from rendering the model through some template.
+The two parts could be done by two separate processes which exchange serialized data.
+It’s even possible to imagine some canonical JSON encoding of the parsed document.</p>
+
+<p>There’s one more behavior where all-inclusive approach of AsciiDoctor gets in a way of doing the right thing.
+AsciiDoctor supports includes, and they are textual, preprocessor includes, meaning that syntax of the included file affects what follows afterwards.
+A much cleaner solution would have been to keep includes in the document tree as distinct nodes (with the path to the included file as an attribute), and let it to the output layer to interpret those as either verbatim text, or subdocuments.</p>
+
+<p>Another aspect of composability is that the parsing part of the processing should have, at minimum, a lightweight, embeddable implementation.
+Ideally, of course, there’s a spec and an array of implementations to choose from.</p>
+
+<p>Markdown fairs fairly well here: there never was a shortage of implementations, and today we even have a bunch of different specs!</p>
+
+<p>AsciiDoctor…
+Well, I am amazed.
+The original implementation of AsciiDoc was in Python.
+AsciiDoctor, the current tool, is in Ruby.
+Neither is too embeddable.
+<em>But!</em> AsciiDoctor folks are crazy, they compiled Ruby to JavaScript (and Java), and so the toolchain is available on JVM and Node.
+At least for Node, I can confidently say that that’s a real production-ready thing which is quite convenient to use!
+Still, I’d prefer a Rust library or a small WebAssembly blob instead.</p>
+
+<p>A different aspect of composability is extensibility.
+In Markdown land, the usual answer for when Markdown doesn’t quite do everything needed (i.e., in 90% of cases), the answer is to extend <em>concrete syntax</em>.
+This is quite unfortunate, changing syntax is <em>hard</em>.
+A much better avenue I think is to take advantage of the generic tree structure, and extend the <em>output</em> layer instead.
+Tree-with-attributes should be enough to express whatever structure is needed, and than its up to the converter to pattern-match this structure and emit its special thing.</p>
+
+<p>Do you remember the fancy two-column rendering above with source-code on the left, and rendered document on the right?
+This is how I’ve done it:</p>
+
+<figure class="code-block">
+
+
+<pre><code>[.two-col]</code>
+<code>--</code>
+<code>```</code>
+<code>[lowerroman]</code>
+<code>1. One</code>
+<code>2. Two</code>
+<code>{cap=" Three"}</code>
+<code>```</code>
+<code></code>
+<code>[lowerroman]</code>
+<code>1. One</code>
+<code>2. Two</code>
+<code>3. Three</code>
+<code>--</code></pre>
+
+</figure>
+<p>That is, a generic block, with <code>.two-col</code> attribute and two children — a listing block and a list.
+Then there’s a separate css which assigns an appropriate <code>flexbox</code> layout for <code>.two-col</code> elements.
+There’s no need for special “two column layout” extension.
+It would be perhaps <em>nice</em> to have a dedicated syntax here, but just re-using generic <code>--</code> block is quite ok!</p>
+
+<aside class="admn">
+  <i class="fa fa-info-circle"></i>
+  <div>
+<p>Great markup language defines the semantics of converting text to a document tree, and provides a lightweight library to do the parsing.</p>
+
+<p>Converting an abstract document tree to a specific output type is left to a thriving ecosystem of converters.
+A particularly powerful form of converter allows calling user-supplied functions on document elements.
+Combined with a generic syntax for nodes and attributes, this provides extensibility which is:</p>
+
+<ul >  <li>
+<p>Easy to use (there’s no new syntax to learn, only new attributes)</p>
+</li>
+  <li>
+<p>Easy to implement (no need to depend on internal API of particular converter, extension is a pure function from data to data)</p>
+</li>
+  <li>
+<p>Powerful (everything can be expressed as a tree of nodes with attributes)</p>
+</li>
+</ul>
+</div>
+</aside></section><section>
+<h2 id="Where-Do-We-Stand-Now">
+<a href="#Where-Do-We-Stand-Now">Where Do We Stand Now? </a>
+</h2>
+
+<p>Note quite there, I would think!
+AsciiDoctor at least half-ticks quite a few of the checkboxes, but it is still not perfect.</p>
+
+<p>There is a specification in progress, I have high hopes that it’ll spur alternative implementations (and most of AsciiDoctor problems are implementation issues).
+At the same time, I am not overly-optimistic.
+The overriding goal for AsciiDoctor is compatibility, and rightfully so.
+There’s a lot of content already written, and I would hate to migrate this blog, for example :)</p>
+
+<p>At the same time, there are quite a few rough edges in AsciiDoctor:</p>
+
+<ul >  <li>
+<p>includes</p>
+</li>
+  <li>
+<p>non-nestable generic blocks</p>
+</li>
+  <li>
+<p>many ways to do certain things (AsciiDoctor essentially supports the union of Markdown and AsciiDoc concrete syntaxes)</p>
+</li>
+  <li>
+<p>lack of some concrete sugar (reference-style links are notably better in Markdown)</p>
+</li>
+</ul>
+
+<p>It feels like there’s a smaller, simpler language somewhere (no, I will not link that xkcd for once (though <code>xkcd:927[]</code> would be a nice use of AsciiDoctor extensibility))</p>
+
+<p>On the positive side of things, it seems that in the recent years we built a lot of infrastructure to make these kinds of projects more feasible.</p>
+
+<p><em>Rust</em> is just about the perfect language to take a <code>String</code> from a user and parse it into some sort of a tree, while packaging the whole thing into a self-contained zero-dependency, highly
+embeddable, reliable, and reusable library.</p>
+
+<p><em>WebAssembly</em> greatly extends reusability of low-level libraries: between a static library with a <code>C</code> ABI, and a <code>.wasm</code> module, you got all important platforms covered.</p>
+
+<p>True extensibility <em>fundamentally</em> requires taking code as input data.
+A converter from a great markup language to HTML should accept some user-written script file as an argument, to do fine tweaking of the conversion process.
+WebAssembly can be a part of the solution, it is a toolchain-neutral way of expressing computation.
+But we have something even more appropriate.
+<em>Deno</em> with its friendly scripting language with nice template literals and a capabilities based security model, is just about the perfect runtime to implement a static site generator which takes a bunch of input documents, a custom conversion script, and outputs a bunch of HTML files.</p>
+
+<p>If I didn’t have anything else to do, I’d certainly be writing my own lightweight markup language today!</p>
+</section>]]></content>
+</entry>
+
+<entry>
+<title type="html">GitHub Actions Permissions</title>
+<link href="https://matklad.github.io/2022/10/24/actions-permissions.html" rel="alternate" type="text/html" title="Self Modifying Code" />
+<published>2022-10-24T00:00:00+00:00</published>
+<updated>2022-10-24T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2022/10/24/actions-permissions</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[This short note documents important wrong default in GitHub Actions, which should be corrected for much better contribution experience.]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2022/10/24/actions-permissions.html"><![CDATA[
+<h1 id="GitHub-Actions-Permissions">
+<a href="#GitHub-Actions-Permissions">GitHub Actions Permissions <time datetime="2022-10-24">Oct 24, 2022</time></a>
+</h1>
+
+<p>This short note documents important wrong default in GitHub Actions, which should be corrected for much better contribution experience.</p>
+
+<p>Under <span class="menu">Settings <i class="fa fa-angle-right"></i> Actions <i class="fa fa-angle-right"></i> General</span> there’s this setting (default pictured):</p>
+
+<figure>
+<img src="https://user-images.githubusercontent.com/1711539/197515707-28b440ae-2053-425c-bf86-8dc3734cf9b4.png" alt=""></figure>
+
+<p>To save your contributors quite a bit of frustration, you want to flip it to this instead:</p>
+
+<figure>
+<img src="https://user-images.githubusercontent.com/1711539/197516133-6f31195a-8487-45e3-b6c6-973f9ef66868.png" alt=""></figure>
+
+<p>Obviously, the first best solution here is for GitHub itself to change the default.</p>
+]]></content>
+</entry>
+
+<entry>
+<title type="html">Why Linux Troubleshooting Advice Sucks</title>
+<link href="https://matklad.github.io/2022/10/19/why-linux-troubleshooting-advice-sucks.html" rel="alternate" type="text/html" title="Self Modifying Code" />
+<published>2022-10-19T00:00:00+00:00</published>
+<updated>2022-10-19T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2022/10/19/why-linux-troubleshooting-advice-sucks</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[A short post on how to create better troubleshooting documentation, prompted by me spending last evening trying to get builtin display of my laptop working with Linux.]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2022/10/19/why-linux-troubleshooting-advice-sucks.html"><![CDATA[
+<h1 id="Why-Linux-Troubleshooting-Advice-Sucks">
+<a href="#Why-Linux-Troubleshooting-Advice-Sucks">Why Linux Troubleshooting Advice Sucks <time datetime="2022-10-19">Oct 19, 2022</time></a>
+</h1>
+
+<p>A short post on how to create better troubleshooting documentation, prompted by me spending last evening trying to get builtin display of my laptop working with Linux.</p>
+
+<p>What finally fixed the blank screen for me was this advice from NixOS wiki:</p>
+
+<aside class="block">
+<div class="title">.12th Gen (Alder Lake)</div>
+
+
+<p>X Server may fail to start with the newer 12th generation, Alder Lake, iRISxe integrated graphics chips.
+If this is the case, you can give the kernel a hint as to what driver to use.
+First confirm the graphic chip’s device ID by running in a terminal:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-title function_">$</span> nix-shell -p pciutils --run "lspci | grep VGA"</code>
+<code><span class="hl-output">00:02.0 VGA compatible controller: Intel Corporation Device 46a6 (rev 0c)</span></code></pre>
+
+</figure>
+<p>In this example, “46a6” is the device ID. You can then add this to your configuration and reboot:</p>
+
+<figure class="code-block">
+
+
+<pre><code>boot.kernelParams = [ "i915.force_probe=46a6" ];</code></pre>
+
+</figure>
+</aside>
+
+<p>While this particular approach worked, in contrast to a dozen different ones I tried before, I think it shares a very common flaw, which is endemic to troubleshooting documentation.
+Can you spot it?</p>
+
+<p>The advice tells you the remedy (“add this kernel parameter”), but it doesn’t explain how to verify that this indeed is the problem.
+That is, if the potential problem is a not loaded kernel driver, it would really help me to know how to check which kernel driver is in use, so that I can do both:</p>
+
+<ul >  <li>
+<p><em>Before</em> adding the parameter, check that <code>46a6</code> doesn’t have a driver</p>
+</li>
+  <li>
+<p><em>After</em> the fix, verify that <code>i915</code> is indeed used.</p>
+</li>
+</ul>
+
+<p>If a “fix” doesn’t come with a linked “diagnostic”, a very common outcome is:</p>
+
+<ol >  <li>
+<p>Apply some random fix from the Internet</p>
+</li>
+  <li>
+<p>Observe that the final problem (blank screen) isn’t fixed</p>
+</li>
+  <li>
+<p>Wonder which of the two is the case:</p>
+
+<ul >  <li>
+<p>the fix is not relevant for the problem,</p>
+</li>
+  <li>
+<p>the fix is relevant, but is applied wrong.</p>
+</li>
+</ul>
+</li>
+</ol>
+
+<p>So, call to action: if you are writing any kind of documentation, before explaining how to <em>fix</em> the problem, teach the user how to <em>diagnose</em> it.</p>
+
+<p>When helping with <code>git</code>, start with explaining <code>git log</code> and <code>git status</code>, not with <code>git reset</code> or <code>git reflog</code>.</p>
+<hr />
+<p>While the post might come as just a tiny bit angry, I want to explicitly mention that I am eternally grateful to all the people who write <em>any</em> kind of docs for using Linux on desktop.
+I’ve been running it for more than 10 years at this point, and I am still completely clueless as to how debug issues from the first principles.
+If not for all of the wikis, stackoverflows and random forum posts out there, I wouldn’t be able to use the OS, so thank you all!</p>
+]]></content>
+</entry>
+
+<entry>
+<title type="html">Hard Mode Rust</title>
+<link href="https://matklad.github.io/2022/10/06/hard-mode-rust.html" rel="alternate" type="text/html" title="Self Modifying Code" />
+<published>2022-10-06T00:00:00+00:00</published>
+<updated>2022-10-06T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2022/10/06/hard-mode-rust</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[This post is a case study of writing a Rust application using only minimal, artificially constrained API (eg, no dynamic memory allocation).
+It assumes a fair bit of familiarity with the language.]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2022/10/06/hard-mode-rust.html"><![CDATA[
+<h1 id="Hard-Mode-Rust">
+<a href="#Hard-Mode-Rust">Hard Mode Rust <time datetime="2022-10-06">Oct 6, 2022</time></a>
+</h1>
+
+<p>This post is a case study of writing a Rust application using only minimal, artificially constrained API (eg, no dynamic memory allocation).
+It assumes a fair bit of familiarity with the language.</p>
+<section>
+<h2 id="Hard-Mode-Rust1">
+<a href="#Hard-Mode-Rust1">Hard Mode Rust </a>
+</h2>
+
+<p>The back story here is a particular criticism of Rust and C++ from hard-core C programmers.
+This criticism is aimed at <a href="https://en.cppreference.com/w/cpp/language/raii">RAII</a> – the language-defining feature of C++, which was wholesale imported to Rust as well.
+RAII makes using various resources requiring cleanups (file descriptors, memory, locks) easy — any place in the program can create a resource, and the cleanup code will be invoked automatically when needed.
+And herein lies the problem — because allocating resources becomes easy, RAII encourages a sloppy attitude to resources, where they are allocated and destroyed all over the place.
+In particular, this leads to:</p>
+
+<ul >  <li>
+<p>Decrease in reliability. Resources are usually limited in principle, but actual resource exhaustion happens rarely.
+If resources are allocated throughout the program, there are many virtually untested codepaths.</p>
+</li>
+  <li>
+<p>Lack of predictability. It usually is impossible to predict up-front how much resources will the program consume.
+Instead, resource-consumption is observed empirically.</p>
+</li>
+  <li>
+<p>Poor performance. Usually, it is significantly more efficient to allocate and free resources in batches.
+Cleanup code for individual resources is scattered throughout codebase, increasing code bloat</p>
+</li>
+  <li>
+<p>Spaghetti architecture. Resource allocation is an architecturally salient thing.
+If all resource management is centralized to a single place, it becomes significantly easier to understand lifecycle of resources.</p>
+</li>
+</ul>
+
+<p>I think this is a fair criticism.
+In fact, I think this is the same criticism that C++ and Rust programmers aim at garbage collected languages.
+This is a spectrum:</p>
+
+<figure class="code-block">
+
+
+<pre><code>           GC object graph</code>
+<code>                 v v</code>
+<code>                  v</code>
+<code>        Tree of values with RAII</code>
+<code>                 v v</code>
+<code>                  v</code>
+<code>Static allocation of resources at startup</code></pre>
+
+</figure>
+<p>Rust programmers typically are not exposed to the lowest level of this pyramid.
+But there’s a relatively compact exercise to gain the relevant experience: try re-implementing your favorite Rust programs on hard mode.</p>
+
+<p><strong><strong>Hard Mode</strong></strong> means that you split your program into <code>std</code> binary and <code>#![no_std]</code> no-alloc library.
+Only the small binary is allowed to directly ask OS for resources.
+For the library, all resources must be injected.
+In particular, to do memory allocation, the library receives a slice of bytes of a fixed size, and should use that for all storage.
+Something like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-comment">// app/src/main.rs</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">main</span>() {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">mem_limit</span> = <span class="hl-number">64</span> * <span class="hl-number">1024</span>;</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">memory</span> = <span class="hl-built_in">vec!</span>[<span class="hl-number">0u8</span>; mem_limit];</code>
+<code>  app::<span class="hl-title function_ invoke__">run</span>(&amp;<span class="hl-keyword">mut</span> memory)</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-comment">// app/src/lib.rs</span></code>
+<code><span class="hl-meta">#![no_std]</span> <span class="hl-comment">// &lt;- the point of the exercise</span></code>
+<code></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">run</span>(memory: &amp;<span class="hl-keyword">mut</span> [<span class="hl-type">u8</span>]) {</code>
+<code>  ...</code>
+<code>}</code></pre>
+
+</figure></section><section>
+<h2 id="Ray-Tracing">
+<a href="#Ray-Tracing">Ray Tracing </a>
+</h2>
+
+<p>So, this is what the post is about: my experience implementing a toy hard mode ray tracer.
+You can find the code on GitHub: <a class="url" href="http://github.com/matklad/crt">http://github.com/matklad/crt</a>.</p>
+
+<p>The task of a ray tracer is to convert a description of a 3D scene like the following one:</p>
+
+<figure class="code-block">
+
+
+<pre><code>background #000000</code>
+<code></code>
+<code>camera {</code>
+<code>    pos 0,10,-50</code>
+<code>    look_at 0,0,0</code>
+<code>    up 0,-1,0</code>
+<code>    focus 50</code>
+<code>    dim 80x60</code>
+<code>}</code>
+<code></code>
+<code>light {</code>
+<code>    pos -20,10,0</code>
+<code>    color #aa1111</code>
+<code>}</code>
+<code></code>
+<code>plane {</code>
+<code>    pos 0,-10,0</code>
+<code>    normal 0,1,0</code>
+<code>    material {</code>
+<code>        color #5566FF</code>
+<code>        diffuse 3</code>
+<code>    }</code>
+<code>}</code>
+<code></code>
+<code>mesh {</code>
+<code>    material {</code>
+<code>        color #BB5566</code>
+<code>        diffuse 3</code>
+<code>    }</code>
+<code></code>
+<code>    data {</code>
+<code>        v 5.92,4.12,0.00</code>
+<code>        v 5.83,4.49,0.00</code>
+<code>        v 5.94,4.61,0.00</code>
+<code>        v 6.17,4.49,0.00</code>
+<code>        v 6.42,4.12,0.00</code>
+<code>        v 5.38,4.12,2.74</code>
+<code>        ...</code>
+<code></code>
+<code>        vn -0.96,-0.25,0.00</code>
+<code>        vn -0.96,0.25,0.00</code>
+<code>        vn -0.09,0.99,0.00</code>
+<code>        vn 0.68,0.73,0.00</code>
+<code>        vn 0.87,0.49,0.00</code>
+<code>        vn -0.89,-0.25,-0.36</code>
+<code>        ...</code>
+<code></code>
+<code>        f 1/1 2/2 3/3</code>
+<code>        f 4/4 5/5 6/6</code>
+<code>        ...</code>
+<code>    }</code>
+<code></code>
+<code>}</code></pre>
+
+</figure>
+<p>Into a rendered image like this:</p>
+
+<figure>
+<img src="https://user-images.githubusercontent.com/1711539/194287665-05583649-dcb0-4014-82b9-424f945e19a4.png" alt=""></figure>
+
+<p>This works rather intuitive conceptually.
+First, imagine the above scene, with an infinite fuchsia colored plane and a red Utah teapot hovering above that.
+Then, imagine a camera standing at <code>0,10,-50</code> (in cartesian coordinates) and aiming at the origin.
+Now, draw an imaginary rectangular 80x60 screen at a focus distance of 50 from the camera along its line of side.
+To get a 2D picture, we shoot a ray from the camera through each “pixel” on the screen, note which object on the scene is hit (plan, teapot, background), and color the pixel accordingly.
+See <a href="https://pbrt.org">PBRT Book</a> if you feel like falling further into this particular rabbit hole (warning: it is very deep) (I apologize for “little square pixels” simplification I use throughout the post :-) ).</p>
+
+<p>I won’t focus on specific algorithms to implement that (indeed, crt is a very naive tracer), but rather highlight Hard Mode Rust specific concerns.</p>
+</section><section>
+<h2 id="Pixel-Buffer">
+<a href="#Pixel-Buffer">Pixel Buffer </a>
+</h2>
+
+<p>Ultimately, the out of a ray tracer is a 2D buffer with 8bit RGB pixels.
+One would typically represent it as follows:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Color</span> { r: <span class="hl-type">u8</span>, g: <span class="hl-type">u8</span>, b: <span class="hl-type">u8</span> }</code>
+<code></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Buf</span> {</code>
+<code>  dim: [<span class="hl-type">u32</span>; <span class="hl-number">2</span>]</code>
+<code>  <span class="hl-comment">// invariant: data.len() == dim.0 * dim.1</span></code>
+<code>  data: <span class="hl-type">Box</span>&lt;[Color]&gt;,</code>
+<code>}</code></pre>
+
+</figure>
+<p>For us, we want someone else (main) to allocate that box of colors for us, so instead we do the following:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Buf</span>&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>  dim: [<span class="hl-type">u32</span>; <span class="hl-number">2</span>],</code>
+<code>  buf: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [Color],</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">impl</span>&lt;<span class="hl-symbol">&#x27;m</span>&gt; Buf&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>  <span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">new</span>(dim: Idx, buf: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [Color]) <span class="hl-punctuation">-&gt;</span> Buf&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>    <span class="hl-built_in">assert!</span>(dim.<span class="hl-number">0</span> * dim.<span class="hl-number">1</span> == buf.<span class="hl-title function_ invoke__">len</span>() <span class="hl-keyword">as</span> <span class="hl-type">u32</span>);</code>
+<code>    Buf { dim, buf }</code>
+<code>  }</code>
+<code>}</code></pre>
+
+</figure>
+<p>The <code>'m</code> lifetime we use for abstract memory managed elsewhere.
+Note how the struct grew an extra lifetime!
+This is extra price we have to pay for not relying on RAII to cleanup resources for us:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-comment">// Easy Mode</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">paint</span>(buf: &amp;<span class="hl-keyword">mut</span> Buf) { ... }</code>
+<code></code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">PaintCtx</span>&lt;<span class="hl-symbol">&#x27;a</span>&gt; {</code>
+<code>  buf: &amp;<span class="hl-symbol">&#x27;a</span> <span class="hl-keyword">mut</span> Buf</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-comment">// Hard Mode</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">paint</span>(buf: &amp;<span class="hl-keyword">mut</span> Buf&lt;<span class="hl-symbol">&#x27;_</span>&gt;) { ... }</code>
+<code></code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">PaintCtx</span>&lt;<span class="hl-symbol">&#x27;a</span>, <span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>  buf: &amp;<span class="hl-symbol">&#x27;a</span> <span class="hl-keyword">mut</span> Buf&lt;<span class="hl-symbol">&#x27;m</span>&gt;</code>
+<code>}</code></pre>
+
+</figure>
+<p>Note in particular how the <code>Ctx</code> struct now has to include two lifetimes.
+This feels unnecessary: <code>'a</code> is shorter than <code>'m</code>.
+I wish it was possible to somehow abstract that away:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">PaintCtx</span>&lt;<span class="hl-symbol">&#x27;a</span>&gt; {</code>
+<code>  buf: &amp;<span class="hl-symbol">&#x27;a</span> <span class="hl-keyword">mut</span> Buf&lt;<span class="hl-symbol">&#x27;_</span>&gt; <span class="hl-comment">// &amp;&#x27;a mut exists&lt;&#x27;m&gt;: Buf&lt;&#x27;m&gt;</span></code>
+<code>}</code></pre>
+
+</figure>
+<p>I don’t think that’s really possible (<a href="https://matklad.github.io/2018/05/04/encapsulating-lifetime-of-the-field.html">earlier post about this</a>).
+In particular, the following would run into variance issues:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">PaintCtx</span>&lt;<span class="hl-symbol">&#x27;a</span>&gt; {</code>
+<code>  buf: &amp;<span class="hl-symbol">&#x27;a</span> <span class="hl-keyword">mut</span> Buf&lt;<span class="hl-symbol">&#x27;a</span>&gt;</code>
+<code>}</code></pre>
+
+</figure>
+<p>Ultimately, this is annoying, but not a deal breaker.</p>
+
+<p>With this <code>rgb::Buf&lt;'_&gt;</code>, we can sketch the program:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-comment">// hard mode library</span></code>
+<code><span class="hl-meta">#![no_std]</span></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">render</span>&lt;<span class="hl-symbol">&#x27;a</span>&gt;(</code>
+<code>  crt: &amp;<span class="hl-symbol">&#x27;a</span> <span class="hl-type">str</span>,   <span class="hl-comment">// textual description of the scene</span></code>
+<code>  mem: &amp;<span class="hl-keyword">mut</span> [<span class="hl-type">u8</span>], <span class="hl-comment">// all the memory we can use</span></code>
+<code>  buf: &amp;<span class="hl-keyword">mut</span> rgb::Buf, <span class="hl-comment">// write image here</span></code>
+<code>) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;(), Error&lt;<span class="hl-symbol">&#x27;a</span>&gt;&gt; {</code>
+<code>  ...</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-comment">// main</span></code>
+<code><span class="hl-meta">#[derive(argh::FromArgs)]</span></code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">Args</span> {</code>
+<code>  <span class="hl-meta">#[argh(option, default = <span class="hl-string">&quot;64&quot;</span>)]</span>  mem: <span class="hl-type">usize</span>,</code>
+<code>  <span class="hl-meta">#[argh(option, default = <span class="hl-string">&quot;800&quot;</span>)]</span> width: <span class="hl-type">u32</span>,</code>
+<code>  <span class="hl-meta">#[argh(option, default = <span class="hl-string">&quot;600&quot;</span>)]</span> height: <span class="hl-type">u32</span>,</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">main</span>() <span class="hl-punctuation">-&gt;</span> anyhow::<span class="hl-type">Result</span>&lt;()&gt; {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">args</span>: Args = argh::<span class="hl-title function_ invoke__">from_env</span>();</code>
+<code></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">crt</span> = <span class="hl-type">String</span>::<span class="hl-title function_ invoke__">new</span>();</code>
+<code>  io::<span class="hl-title function_ invoke__">stdin</span>()</code>
+<code>    .<span class="hl-title function_ invoke__">read_to_string</span>(&amp;<span class="hl-keyword">mut</span> crt)</code>
+<code>    .<span class="hl-title function_ invoke__">context</span>(<span class="hl-string">&quot;reading input&quot;</span>)?;</code>
+<code></code>
+<code>  <span class="hl-comment">// Allocate all the memory.</span></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">mem</span> = <span class="hl-built_in">vec!</span>[<span class="hl-number">0</span>; args.mem * <span class="hl-number">1024</span>];</code>
+<code></code>
+<code>  <span class="hl-comment">// Allocate the image</span></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">buf</span> = <span class="hl-built_in">vec!</span>[</code>
+<code>    rgb::Color::<span class="hl-title function_ invoke__">default</span>();</code>
+<code>    (args.width * args.height) <span class="hl-keyword">as</span> <span class="hl-type">usize</span></code>
+<code>  ];</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">buf</span> =</code>
+<code>    rgb::Buf::<span class="hl-title function_ invoke__">new</span>([args.width, args.height], &amp;<span class="hl-keyword">mut</span> buf);</code>
+<code></code>
+<code>  render::<span class="hl-title function_ invoke__">render</span>(</code>
+<code>    &amp;crt,</code>
+<code>    &amp;<span class="hl-keyword">mut</span> mem,</code>
+<code>    &amp;<span class="hl-keyword">mut</span> buf,</code>
+<code>  )</code>
+<code>  .<span class="hl-title function_ invoke__">map_err</span>(|err| anyhow::format_err!(<span class="hl-string">&quot;{err}&quot;</span>))?;</code>
+<code></code>
+<code>  <span class="hl-comment">// Write result as a PPM image format.</span></code>
+<code>  <span class="hl-title function_ invoke__">write_ppm</span>(&amp;buf, &amp;<span class="hl-keyword">mut</span> io::<span class="hl-title function_ invoke__">stdout</span>().<span class="hl-title function_ invoke__">lock</span>())</code>
+<code>    .<span class="hl-title function_ invoke__">context</span>(<span class="hl-string">&quot;writing output&quot;</span>)?;</code>
+<code>  <span class="hl-title function_ invoke__">Ok</span>(())</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">write_ppm</span>(</code>
+<code>  buf: &amp;rgb::Buf,</code>
+<code>  w: &amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">dyn</span> io::Write,</code>
+<code>) <span class="hl-punctuation">-&gt;</span> io::<span class="hl-type">Result</span>&lt;()&gt; {</code>
+<code>  ...</code>
+<code>}</code></pre>
+
+</figure></section><section>
+<h2 id="Hard-Mode-Rayon">
+<a href="#Hard-Mode-Rayon">Hard Mode Rayon </a>
+</h2>
+
+<p>Ray tracing is an embarrassingly parallel task — the color of each output pixel can be computed independently.
+Usually, the excellent <a href="https://lib.rs/crates/rayon">rayon</a> library is used to take advantage of parallelism, but for our raytracer I want to show a significantly simpler API design for taking advantage of many cores.
+I’ve seen this design in <a href="https://github.com/sorbet/sorbet/blob/master/common/concurrency/WorkerPool.h">Sorbet</a>, a type checker for Ruby.</p>
+
+<p>Here’s how a <code>render</code> function with support for parallelism looks:</p>
+
+<figure class="code-block">
+
+
+<pre><code class="hl-line"><span class="hl-keyword">type</span> <span class="hl-title class_">ThreadPool</span>&lt;<span class="hl-symbol">&#x27;t</span>&gt; = <span class="hl-keyword">dyn</span> <span class="hl-title function_ invoke__">Fn</span>(&amp;(<span class="hl-keyword">dyn</span> <span class="hl-title function_ invoke__">Fn</span>() + <span class="hl-built_in">Sync</span>)) + <span class="hl-symbol">&#x27;t</span>;</code>
+<code></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">render</span>&lt;<span class="hl-symbol">&#x27;a</span>&gt;(</code>
+<code>  crt: &amp;<span class="hl-symbol">&#x27;a</span> <span class="hl-type">str</span>,</code>
+<code>  mem: &amp;<span class="hl-keyword">mut</span> [<span class="hl-type">u8</span>],</code>
+<code class="hl-line">  in_parallel: &amp;ThreadPool&lt;<span class="hl-symbol">&#x27;_</span>&gt;,</code>
+<code>  buf: &amp;<span class="hl-keyword">mut</span> rgb::Buf&lt;<span class="hl-symbol">&#x27;_</span>&gt;,</code>
+<code>) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;(), Error&lt;<span class="hl-symbol">&#x27;a</span>&gt;&gt; {</code></pre>
+
+</figure>
+<p>The interface here is the <code>in_parallel</code> function, which takes another function as an argument and runs it, in parallel, on all available threads.
+You typically use it like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">let</span> <span class="hl-variable">work</span>: ConcurrentQueue&lt;Work&gt; = ConcurrentQueue::<span class="hl-title function_ invoke__">new</span>();</code>
+<code>work.<span class="hl-title function_ invoke__">extend</span>(available_work);</code>
+<code><span class="hl-title function_ invoke__">in_parallel</span>(&amp;|| {</code>
+<code>  <span class="hl-keyword">while</span> <span class="hl-keyword">let</span> <span class="hl-variable">Some</span>(item) = work.<span class="hl-title function_ invoke__">pop</span>() {</code>
+<code>    <span class="hl-title function_ invoke__">process</span>(item);</code>
+<code>  }</code>
+<code>})</code></pre>
+
+</figure>
+<p>This is <em>similar</em> to a typical threadpool, but different.
+Similar to a threadpool, there’s a number of threads (typically one per core) which execute arbitrary jobs.
+The first difference is that a typical threadpool sends a job to to a single thread, while in this design the same job is broadcasted to all threads.
+The job is <code>Fn + Sync</code> rather than <code>FnOnce + Send</code>.
+The second difference is that we <em>block</em> until the job is done on all threads, so we can borrow data from the stack.</p>
+
+<p>It’s on the caller to explicitly implement a concurrent queue to distributed specific work items.
+In my implementation, I slice the image in rows</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">type</span> <span class="hl-title class_">ThreadPool</span>&lt;<span class="hl-symbol">&#x27;t</span>&gt; = <span class="hl-keyword">dyn</span> <span class="hl-title function_ invoke__">Fn</span>(&amp;(<span class="hl-keyword">dyn</span> <span class="hl-title function_ invoke__">Fn</span>() + <span class="hl-built_in">Sync</span>)) + <span class="hl-symbol">&#x27;t</span>;</code>
+<code></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">render</span>&lt;<span class="hl-symbol">&#x27;a</span>&gt;(</code>
+<code>  crt: &amp;<span class="hl-symbol">&#x27;a</span> <span class="hl-type">str</span>,</code>
+<code>  mem: &amp;<span class="hl-keyword">mut</span> [<span class="hl-type">u8</span>],</code>
+<code>  in_parallel: &amp;ThreadPool&lt;<span class="hl-symbol">&#x27;_</span>&gt;,</code>
+<code>  buf: &amp;<span class="hl-keyword">mut</span> rgb::Buf&lt;<span class="hl-symbol">&#x27;_</span>&gt;,</code>
+<code>) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;(), Error&lt;<span class="hl-symbol">&#x27;a</span>&gt;&gt; {</code>
+<code>  ...</code>
+<code>  <span class="hl-comment">// Note: this is not mut, because this is</span></code>
+<code>  <span class="hl-comment">// a concurrent iterator.</span></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">rows</span> = buf.<span class="hl-title function_ invoke__">partition</span>();</code>
+<code>  <span class="hl-title function_ invoke__">in_parallel</span>(&amp;|| {</code>
+<code>    <span class="hl-comment">// next_row increments an atomic and</span></code>
+<code>    <span class="hl-comment">// uses the row index to give an `&amp;mut`</span></code>
+<code>    <span class="hl-comment">// into the row&#x27;s pixels.</span></code>
+<code>    <span class="hl-keyword">while</span> <span class="hl-keyword">let</span> <span class="hl-variable">Some</span>(row) = rows.<span class="hl-title function_ invoke__">next_row</span>() {</code>
+<code>      <span class="hl-keyword">let</span> <span class="hl-variable">y</span>: <span class="hl-type">u32</span> = row.y;</code>
+<code>      <span class="hl-keyword">let</span> <span class="hl-variable">buf</span>: &amp;<span class="hl-keyword">mut</span> [rgb::Color] = row.buf;</code>
+<code>      <span class="hl-keyword">for</span> <span class="hl-variable">x</span> <span class="hl-keyword">in</span> <span class="hl-number">0</span>..dim[<span class="hl-number">0</span>] {</code>
+<code>        <span class="hl-keyword">let</span> <span class="hl-variable">color</span> = render::<span class="hl-title function_ invoke__">render_pixel</span>(&amp;scene, [x, y]);</code>
+<code>        buf[x <span class="hl-keyword">as</span> <span class="hl-type">usize</span>] = <span class="hl-title function_ invoke__">to_rgb</span>(&amp;color);</code>
+<code>      }</code>
+<code>    }</code>
+<code>  });</code>
+<code>  ...</code>
+<code>}</code></pre>
+
+</figure>
+<p>In <code>main</code>, we implement a concrete <code>ThreadPool</code> by spawning a thread per core:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">main</span>() <span class="hl-punctuation">-&gt;</span> anyhow::<span class="hl-type">Result</span>&lt;()&gt; {</code>
+<code>  ...</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">threads</span> = <span class="hl-keyword">match</span> args.jobs {</code>
+<code>    <span class="hl-title function_ invoke__">Some</span>(it) =&gt; Threads::<span class="hl-title function_ invoke__">new</span>(it),</code>
+<code>    <span class="hl-literal">None</span> =&gt; Threads::<span class="hl-title function_ invoke__">with_max_threads</span>()?,</code>
+<code>  };</code>
+<code>  render::<span class="hl-title function_ invoke__">render</span>(</code>
+<code>    &amp;crt,</code>
+<code>    &amp;<span class="hl-keyword">mut</span> mem,</code>
+<code>    &amp;|f| threads.<span class="hl-title function_ invoke__">in_parallel</span>(f),</code>
+<code>    &amp;<span class="hl-keyword">mut</span> buf,</code>
+<code>  )</code>
+<code>  .<span class="hl-title function_ invoke__">map_err</span>(|err| anyhow::format_err!(<span class="hl-string">&quot;{err}&quot;</span>))?;</code>
+<code>}</code></pre>
+
+</figure></section><section>
+<h2 id="Allocator">
+<a href="#Allocator">Allocator </a>
+</h2>
+
+<p>The scenes we are going to render are fundamentally dynamically sized.
+They can contain arbitrary number of objects.
+So we can’t just statically allocate all the memory up-front.
+Instead, there’s a CLI argument which sets the amount of memory a ray tracer can use, and we should either manage with that, or return an error.
+So we do need to write our own allocator.
+But we’ll try very hard to only allocate the memory we actually need, so we won’t have to implement memory deallocation at all.
+So a simple bump allocator would do:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Mem</span>&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>  raw: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [<span class="hl-type">u8</span>],</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-meta">#[derive(Debug)]</span></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Oom</span>;</code>
+<code></code>
+<code><span class="hl-keyword">impl</span>&lt;<span class="hl-symbol">&#x27;m</span>&gt; Mem&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>  <span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">new</span>(raw: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [<span class="hl-type">u8</span>]) <span class="hl-punctuation">-&gt;</span> Mem&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>    Mem { raw }</code>
+<code>  }</code>
+<code></code>
+<code>  <span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">alloc</span>&lt;T&gt;(&amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>, t: T) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;&amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> T, Oom&gt; { ... }</code>
+<code></code>
+<code>  <span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">alloc_array</span>&lt;T&gt;(</code>
+<code>    &amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>,</code>
+<code>    n: <span class="hl-type">usize</span>,</code>
+<code>    <span class="hl-keyword">mut</span> element: <span class="hl-keyword">impl</span> <span class="hl-title class_">FnMut</span>(<span class="hl-type">usize</span>) <span class="hl-punctuation">-&gt;</span> T,</code>
+<code>  ) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;&amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [T], Oom&gt; { ... }</code>
+<code></code>
+<code>  <span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">alloc_array_default</span>&lt;T: <span class="hl-built_in">Default</span>&gt;(</code>
+<code>    &amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>,</code>
+<code>    n: <span class="hl-type">usize</span>,</code>
+<code>  ) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;&amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [T], Oom&gt; {</code>
+<code>    <span class="hl-keyword">self</span>.<span class="hl-title function_ invoke__">alloc_array</span>(n, |_| T::<span class="hl-title function_ invoke__">default</span>())</code>
+<code>  }</code>
+<code>}</code></pre>
+
+</figure>
+<p>We can create an allocator from a slice of bytes, and then ask it to allocate values and arrays.
+Schematically, <code>alloc</code> looks like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-comment">// PSEUDOCODE, doesn&#x27;t handle alignment and is broken.</span></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">alloc</span>&lt;<span class="hl-symbol">&#x27;a</span>, T&gt;(</code>
+<code>  &amp;<span class="hl-symbol">&#x27;a</span> <span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>,</code>
+<code>  val: T,</code>
+<code>) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;&amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> T, Oom&gt; {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">size</span> = mem::size_of::&lt;T&gt;();</code>
+<code>  <span class="hl-keyword">if</span> <span class="hl-keyword">self</span>.raw.<span class="hl-title function_ invoke__">len</span>() &lt; size {</code>
+<code>    <span class="hl-comment">// Return error if there isn&#x27;t enough of memory.</span></code>
+<code>    <span class="hl-keyword">return</span> <span class="hl-title function_ invoke__">Err</span>(Oom);</code>
+<code>  }</code>
+<code></code>
+<code>  <span class="hl-comment">// Split off size_of::&lt;T&gt; bytes from the start,</span></code>
+<code>  <span class="hl-comment">// doing a little `mem::take` dance to placate</span></code>
+<code>  <span class="hl-comment">// the borrowchecker.</span></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">res</span>: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [<span class="hl-type">u8</span>] = {</code>
+<code>    <span class="hl-keyword">let</span> <span class="hl-variable">raw</span> = mem::<span class="hl-title function_ invoke__">take</span>(&amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>.raw);</code>
+<code>    <span class="hl-keyword">let</span> (res, raw) = raw.<span class="hl-title function_ invoke__">split_at_mut</span>(size);</code>
+<code>    <span class="hl-keyword">self</span>.raw = raw;</code>
+<code>    res</code>
+<code>  }</code>
+<code></code>
+<code>  <span class="hl-comment">// Initialize the value</span></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">res</span> = res <span class="hl-keyword">as</span> *<span class="hl-keyword">mut</span> [<span class="hl-type">u8</span>] <span class="hl-keyword">as</span> *<span class="hl-keyword">mut</span> <span class="hl-type">u8</span> <span class="hl-keyword">as</span> *<span class="hl-keyword">mut</span> T;</code>
+<code>  <span class="hl-keyword">unsafe</span> {</code>
+<code>    ptr::<span class="hl-title function_ invoke__">write</span>(res, val);</code>
+<code>    <span class="hl-title function_ invoke__">Ok</span>(&amp;<span class="hl-keyword">mut</span> *res)</code>
+<code>  }</code>
+<code>}</code></pre>
+
+</figure>
+<p>To make this fully kosher we need to handle alignment as well, but I cut that bit out for brevity.</p>
+
+<p>For allocating arrays, it’s useful if all-zeros bitpattern is a valid default instance of type, as that allows to skip element-wise initialization.
+This condition isn’t easily expressible in today’s Rust though, so we require initializing every array member.</p>
+
+<p>The result of an allocation is <code>&amp;'m T</code> – this is how we spell <code>Box&lt;T&gt;</code> on hard mode.</p>
+</section><section>
+<h2 id="Parsing">
+<a href="#Parsing">Parsing </a>
+</h2>
+
+<p>The scene contains various objects, like spheres and planes:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Sphere</span> {</code>
+<code>  <span class="hl-keyword">pub</span> center: v64, <span class="hl-comment">// v64 is [f64; 3]</span></code>
+<code>  <span class="hl-keyword">pub</span> radius: <span class="hl-type">f64</span>,</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Plane</span> {</code>
+<code>  <span class="hl-keyword">pub</span> origin: v64,</code>
+<code>  <span class="hl-keyword">pub</span> normal: v64,</code>
+<code>}</code></pre>
+
+</figure>
+<p>Usually, we’d represent a scene as</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Scene</span> {</code>
+<code>  <span class="hl-keyword">pub</span> camera: Camera,</code>
+<code>  <span class="hl-keyword">pub</span> spheres: <span class="hl-type">Vec</span>&lt;Sphere&gt;,</code>
+<code>  <span class="hl-keyword">pub</span> planes: <span class="hl-type">Vec</span>&lt;Plane&gt;,</code>
+<code>}</code></pre>
+
+</figure>
+<p>We <em>could</em> implement a resizable array (<code>Vec</code>), but doing that would require us to either leak memory, or to implement proper deallocation logic in our allocator, and add destructors to reliably trigger that.
+But destructors is exactly something we are trying to avoid in this exercise.
+So our scene will have to look like this instead:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Scene</span>&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>  <span class="hl-keyword">pub</span> camera: Camera,</code>
+<code>  <span class="hl-keyword">pub</span> spheres: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [Sphere],</code>
+<code>  <span class="hl-keyword">pub</span> planes: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [Plane],</code>
+<code>}</code></pre>
+
+</figure>
+<p>And that means we want to know the number of objects we’ll need upfront.
+The way we solve this problem is by doing two-pass parsing.
+In the first pass, we just count things, then we allocate them, then we actually parse them into allocated space.</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-title function_ invoke__">pub</span>(<span class="hl-keyword">crate</span>) <span class="hl-keyword">fn</span> <span class="hl-title function_">parse</span>&lt;<span class="hl-symbol">&#x27;m</span>, <span class="hl-symbol">&#x27;i</span>&gt;(</code>
+<code>  mem: &amp;<span class="hl-keyword">mut</span> Mem&lt;<span class="hl-symbol">&#x27;m</span>&gt;,</code>
+<code>  input: &amp;<span class="hl-symbol">&#x27;i</span> <span class="hl-type">str</span>,</code>
+<code>) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;Scene&lt;<span class="hl-symbol">&#x27;m</span>&gt;, Error&lt;<span class="hl-symbol">&#x27;i</span>&gt;&gt; {</code>
+<code>  <span class="hl-comment">// Size the allocations.</span></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">n_spheres</span> = <span class="hl-number">0</span>;</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">n_planes</span> = <span class="hl-number">0</span>;</code>
+<code>  <span class="hl-keyword">for</span> <span class="hl-variable">word</span> <span class="hl-keyword">in</span> input.<span class="hl-title function_ invoke__">split_ascii_whitespace</span>() {</code>
+<code>    <span class="hl-keyword">match</span> word {</code>
+<code>      <span class="hl-string">&quot;sphere&quot;</span> =&gt; n_spheres += <span class="hl-number">1</span>,</code>
+<code>      <span class="hl-string">&quot;plane&quot;</span> =&gt; n_planes += <span class="hl-number">1</span>,</code>
+<code>      _ =&gt; (),</code>
+<code>    }</code>
+<code>  }</code>
+<code></code>
+<code>  <span class="hl-comment">// Allocate.</span></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">res</span> = Scene {</code>
+<code>    camera: <span class="hl-built_in">Default</span>::<span class="hl-title function_ invoke__">default</span>(),</code>
+<code>    spheres: mem.<span class="hl-title function_ invoke__">alloc_array_default</span>(n_spheres)?</code>
+<code>    planes: mem.<span class="hl-title function_ invoke__">alloc_array_default</span>(n_planes)?,</code>
+<code>  };</code>
+<code></code>
+<code>  <span class="hl-comment">// Parse _into_ the allocated scene.</span></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">p</span> = Parser::<span class="hl-title function_ invoke__">new</span>(mem, input);</code>
+<code>  <span class="hl-title function_ invoke__">scene</span>(&amp;<span class="hl-keyword">mut</span> p, &amp;<span class="hl-keyword">mut</span> res)?;</code>
+<code>  <span class="hl-title function_ invoke__">Ok</span>(res)</code>
+<code>}</code></pre>
+
+</figure>
+<p>If an error is encountered during parsing, we want to create a helpful error message.
+If the message is fully dynamic, we’d have to allocate it <em>into</em> <code>'m</code>, but it seems simpler to just re-use bits of input for error message.
+Hence, <code>Error&lt;'i&gt;</code> is tied to the input lifetime <code>'i</code>, rather memory lifetime <code>'m</code>.</p>
+</section><section>
+<h2 id="Nested-Objects">
+<a href="#Nested-Objects">Nested Objects </a>
+</h2>
+
+<p>One interesting type of object on the scene is a mesh of triangles (for example, the teapot is just a bunch of triangles).
+A naive way to represent a bunch of triangles is to use a vector:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Triangle</span> {</code>
+<code>  <span class="hl-keyword">pub</span> a: v64,</code>
+<code>  <span class="hl-keyword">pub</span> b: v64,</code>
+<code>  <span class="hl-keyword">pub</span> c: v64,</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">type</span> <span class="hl-title class_">Mesh</span> = <span class="hl-type">Vec</span>&lt;Triangle&gt;;</code></pre>
+
+</figure>
+<p>This is wasteful: in a mesh, each edge is shared by two triangles.
+So a single vertex belongs to a bunch of triangles.
+If we store a vector of triangles, we are needlessly duplicating vertex data.
+A more compact representation is to store unique vertexes once, and to use indexes for sharing:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Mesh</span> {</code>
+<code>  <span class="hl-keyword">pub</span> vertexes: <span class="hl-type">Vec</span>&lt;v64&gt;,</code>
+<code>  <span class="hl-keyword">pub</span> faces: <span class="hl-type">Vec</span>&lt;MeshFace&gt;,</code>
+<code>}</code>
+<code><span class="hl-comment">// Indexes point into vertexes vector.</span></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">MeshFace</span> { a: <span class="hl-type">u32</span>, b: <span class="hl-type">u32</span>, c: <span class="hl-type">u32</span> }</code></pre>
+
+</figure>
+<p>Again, on hard mode that would be</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Mesh</span>&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>  <span class="hl-keyword">pub</span> vertexes: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [v64],</code>
+<code>  <span class="hl-keyword">pub</span> faces: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [MeshFace],</code>
+<code>}</code></pre>
+
+</figure>
+<p>And a scene contains a bunch of meshes :</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Scene</span>&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>  <span class="hl-keyword">pub</span> camera: Camera,</code>
+<code>  <span class="hl-keyword">pub</span> spheres: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [Sphere],</code>
+<code>  <span class="hl-keyword">pub</span> planes: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [Plane],</code>
+<code>  <span class="hl-keyword">pub</span> meshes: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [Mesh&lt;<span class="hl-symbol">&#x27;m</span>&gt;],</code>
+<code>}</code></pre>
+
+</figure>
+<p>Note how, if the structure is recursive, we have “owned pointers” of <code>&amp;'m mut T&lt;'m&gt;</code> shape.
+Originally I worried that that would cause problem with variance, but it seems to work fine for ownership specifically.
+During processing, you still need <code>&amp;'a mut T&lt;'m&gt;</code> though.</p>
+
+<p>And that’s why parsing functions hold an uncomfortable bunch of lifetimes:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">mesh</span>&lt;<span class="hl-symbol">&#x27;m</span>, <span class="hl-symbol">&#x27;i</span>&gt;(</code>
+<code>  p: &amp;<span class="hl-keyword">mut</span> Parser&lt;<span class="hl-symbol">&#x27;m</span>, <span class="hl-symbol">&#x27;i</span>, <span class="hl-symbol">&#x27;_</span>&gt;,</code>
+<code>  res: &amp;<span class="hl-keyword">mut</span> Mesh&lt;<span class="hl-symbol">&#x27;m</span>&gt;,</code>
+<code>) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;(), Error&lt;<span class="hl-symbol">&#x27;i</span>&gt;&gt; { ... }</code></pre>
+
+</figure>
+<p>The parser <code>p</code> holds <code>&amp;'i str</code> input and a <code>&amp;'a mut Mem&lt;'m&gt;</code> memory.
+It parses input <em>into</em> a <code>&amp;'b mut Mesh&lt;'m&gt;</code>.</p>
+</section><section>
+<h2 id="Bounding-Volume-Hierarchy">
+<a href="#Bounding-Volume-Hierarchy">Bounding Volume Hierarchy </a>
+</h2>
+
+<p>With <code>Scene&lt;'m&gt;</code> fully parsed, we can finally get to rendering the picture.
+A naive way to do this would be to iterate through each pixel, shooting a ray through it, and then do a nested iterations over every shape, looking for the closest intersection.
+That’s going to be slow!
+The teapot model contains about 1k triangles, and we have 640*480 pixels, which gives us 307_200_000 ray-triangle intersection tests, which is quite slow even with multithreading.</p>
+
+<p>So we are going to speed this up.
+The idea is simple — just don’t intersect a ray with each triangle.
+It is possible to quickly discard batches of triangles.
+If we have a  batch of triangles, we can draw a 3D box around them as a pre-processing step.
+Now if the ray doesn’t intersect the bounding box, we know that it can’t intersect any of the triangles.
+So we can use one test with a bounding box instead of many tests for each triangle.</p>
+
+<p>This is of course one-sided — if the ray intersects the box, it might still miss all of the triangles.
+But, if we place bounding boxes smartly (small boxes which cover many adjacent triangles), we can hope to skip a lot of work.</p>
+
+<p>We won’t go for really smart ways of doing that, and instead will use a simple divide-and-conquer scheme.
+Specifically, we’ll draw a large box around all triangles we have.
+Then, we’ll note which dimension of the resulting box is the longest.
+If, for example, the box is very tall, we’ll cut it in half horizontally, such that each half contains half of the triangles.
+Then, we’ll recursively subdivide the two halves.</p>
+
+<p>In the end, we get a binary tree, where each node contains a bounding box and two children, whose bounding boxes are contained in the parent’s bounding box.
+Leaves contains triangles.
+This construction is called a bounding volume hierarchy, bvh.</p>
+
+<p>To intersect the ray with bvh, we use a recursive procedure.
+Starting at the root node, we descend into children whose bounding boxes are intersected by the ray.
+Sometimes we’ll have to descend into both children, but often enough at least one child’s bounding box won’t touch the ray, allowing us to completely skip the subtree.</p>
+
+<p>On easy mode Rust, we can code it like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">BoundingBox</span> {</code>
+<code>  <span class="hl-comment">// Opposite corners of the box.</span></code>
+<code>  lo: v64, hi: v64,</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">Bvh</span> {</code>
+<code>  root: BvhNode</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">enum</span> <span class="hl-title class_">BvhNode</span> {</code>
+<code>  Split {</code>
+<code>    bb: BoundingBox,</code>
+<code>    children: [<span class="hl-type">Box</span>&lt;BvhNode&gt;; <span class="hl-number">2</span>],</code>
+<code>    <span class="hl-comment">/// Which of X,Y,Z dimensions was used</span></code>
+<code>    <span class="hl-comment">// to cut the bb in two.</span></code>
+<code>    axis: <span class="hl-type">u8</span>,</code>
+<code>  }</code>
+<code>  Leaf {</code>
+<code>    bb: BoundingBox,</code>
+<code>    <span class="hl-comment">/// Index of the triangle in a mesh.</span></code>
+<code>    triangle: <span class="hl-type">u32</span>,</code>
+<code>  }</code>
+<code>}</code></pre>
+
+</figure>
+<p>On hard mode, we don’t really love all those separate boxes, we love arrays!
+So what we’d rather have is</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Bvh</span>&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>  splits: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [BvhSplit],</code>
+<code>  leaves: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [BvhLeaf],</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">BvhSplit</span> {</code>
+<code>  <span class="hl-comment">/// Index into either splits or leaves.</span></code>
+<code>  <span class="hl-comment">/// The `tag` is in the highest bit.</span></code>
+<code>  children: [<span class="hl-type">u32</span>; <span class="hl-number">2</span>],</code>
+<code>  bb: BoundingBox,</code>
+<code>  axis: <span class="hl-type">u8</span>,</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">BvhLeaf</span> {</code>
+<code>  face: <span class="hl-type">u32</span>,</code>
+<code>  bb: BoundingBox,</code>
+<code>}</code></pre>
+
+</figure>
+<p>So we want to write the following function which recursively constructs a bvh for a mesh:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">build</span>(</code>
+<code>  mem: &amp;<span class="hl-keyword">mut</span> Mem&lt;<span class="hl-symbol">&#x27;m</span>&gt;,</code>
+<code>  mesh: &amp;Mesh&lt;<span class="hl-symbol">&#x27;m</span>&gt;,</code>
+<code>) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;Bvh&lt;<span class="hl-symbol">&#x27;m</span>&gt;, Oom&gt; { ... }</code></pre>
+
+</figure>
+<p>The problem is, unlike the parser, we can’t cheaply determine the number of leaves and splits without actually building the whole tree.</p>
+</section><section>
+<h2 id="Scratch-Space">
+<a href="#Scratch-Space">Scratch Space </a>
+</h2>
+
+<p>So what we are going to do here is to allocate a pointer-tree structure into some scratch space, and then copy that into an <code>&amp;'m mut</code> array.
+How do we find the scratch space?
+Our memory is <code>&amp;'m [u8]</code>.
+We allocate stuff from the start of the region.
+So we can split of some amount of scratch space from the end:</p>
+
+<figure class="code-block">
+
+
+<pre><code>&amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [<span class="hl-type">u8</span>] <span class="hl-punctuation">-&gt;</span> (&amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [<span class="hl-type">u8</span>], &amp;<span class="hl-symbol">&#x27;s</span> <span class="hl-keyword">mut</span> [<span class="hl-type">u8</span>])</code></pre>
+
+</figure>
+<p>Stuff we allocate into the first half is allocated “permanently”.
+Stuff we allocate into the second half is allocated temporarily.
+When we drop temp buffer, we can reclaim all that space.</p>
+
+<p>This… probably is the most sketchy part of the whole endeavor.
+It is <code>unsafe</code>, requires lifetimes casing, and I actually can’t get it past miri.
+But it should be fine, right?</p>
+
+<p>So, I have the following thing API:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">impl</span> <span class="hl-title class_">Mem</span>&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>  <span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">with_scratch</span>&lt;T&gt;(</code>
+<code>    &amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>,</code>
+<code>    size: <span class="hl-type">usize</span>,</code>
+<code>    f: <span class="hl-keyword">impl</span> <span class="hl-title class_">FnOnce</span>(&amp;<span class="hl-keyword">mut</span> Mem&lt;<span class="hl-symbol">&#x27;m</span>&gt;, &amp;<span class="hl-keyword">mut</span> Mem&lt;<span class="hl-symbol">&#x27;_</span>&gt;) <span class="hl-punctuation">-&gt;</span> T,</code>
+<code>  ) <span class="hl-punctuation">-&gt;</span> T { ... }</code>
+<code>}</code></pre>
+
+</figure>
+<p>It can be used like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-meta">#[test]</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">test_scratch</span>() {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">buf</span> = [<span class="hl-number">0u8</span>; <span class="hl-number">4</span>];</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">mem</span> = Mem::<span class="hl-title function_ invoke__">new</span>(&amp;<span class="hl-keyword">mut</span> buf);</code>
+<code></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">x</span> = mem.<span class="hl-title function_ invoke__">alloc</span>(<span class="hl-number">0u8</span>).<span class="hl-title function_ invoke__">unwrap</span>();</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">y</span> = mem.<span class="hl-title function_ invoke__">with_scratch</span>(<span class="hl-number">2</span>, |mem, scratch| {</code>
+<code>    <span class="hl-comment">// Here, we can allocate _permanent_ stuff from `mem`,</span></code>
+<code>    <span class="hl-comment">// and temporary stuff from `scratch`.</span></code>
+<code>    <span class="hl-comment">// Only permanent stuff can escape.</span></code>
+<code></code>
+<code>    <span class="hl-keyword">let</span> <span class="hl-variable">y</span> = mem.<span class="hl-title function_ invoke__">alloc</span>(<span class="hl-number">1u8</span>).<span class="hl-title function_ invoke__">unwrap</span>();</code>
+<code>    <span class="hl-keyword">let</span> <span class="hl-variable">z</span> = scratch.<span class="hl-title function_ invoke__">alloc</span>(<span class="hl-number">2u8</span>).<span class="hl-title function_ invoke__">unwrap</span>();</code>
+<code>    <span class="hl-built_in">assert_eq!</span>((*x, *y, *z), (<span class="hl-number">0</span>, <span class="hl-number">1</span>, <span class="hl-number">2</span>));</code>
+<code></code>
+<code>    <span class="hl-comment">// The rest of memory is occupied by scratch.</span></code>
+<code>    <span class="hl-built_in">assert!</span>(mem.<span class="hl-title function_ invoke__">alloc</span>(<span class="hl-number">0u8</span>).<span class="hl-title function_ invoke__">is_err</span>());</code>
+<code></code>
+<code>    y <span class="hl-comment">// Returning z here fails.</span></code>
+<code>  });</code>
+<code></code>
+<code>  <span class="hl-comment">// The scratch memory is now reclaimed.</span></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">z</span> = mem.<span class="hl-title function_ invoke__">alloc</span>(<span class="hl-number">3u8</span>).<span class="hl-title function_ invoke__">unwrap</span>();</code>
+<code>  <span class="hl-built_in">assert_eq!</span>((*x, *y, *z), (<span class="hl-number">0</span>, <span class="hl-number">1</span>, <span class="hl-number">3</span>));</code>
+<code>  <span class="hl-built_in">assert_eq!</span>(buf, [<span class="hl-number">0</span>, <span class="hl-number">1</span>, <span class="hl-number">3</span>, <span class="hl-number">0</span>]);</code>
+<code>  <span class="hl-comment">// Will fail to compile.</span></code>
+<code>  <span class="hl-comment">// assert_eq!(*x, 0);</span></code>
+<code>}</code></pre>
+
+</figure>
+<p>And here’s how <code>with_scratch</code> implemented:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">with_scratch</span>&lt;T&gt;(</code>
+<code>  &amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>,</code>
+<code>  size: <span class="hl-type">usize</span>,</code>
+<code>  f: <span class="hl-keyword">impl</span> <span class="hl-title class_">FnOnce</span>(&amp;<span class="hl-keyword">mut</span> Mem&lt;<span class="hl-symbol">&#x27;m</span>&gt;, &amp;<span class="hl-keyword">mut</span> Mem&lt;<span class="hl-symbol">&#x27;_</span>&gt;) <span class="hl-punctuation">-&gt;</span> T,</code>
+<code>) <span class="hl-punctuation">-&gt;</span> T {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">raw</span> = mem::<span class="hl-title function_ invoke__">take</span>(&amp;<span class="hl-keyword">mut</span> <span class="hl-keyword">self</span>.raw);</code>
+<code></code>
+<code>  <span class="hl-comment">// Split off scratch space.</span></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">mid</span> = raw.<span class="hl-title function_ invoke__">len</span>() - size;</code>
+<code>  <span class="hl-keyword">let</span> (mem, scratch) = raw.<span class="hl-title function_ invoke__">split_at_mut</span>(mid);</code>
+<code></code>
+<code>  <span class="hl-keyword">self</span>.raw = mem;</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">res</span> = <span class="hl-title function_ invoke__">f</span>(<span class="hl-keyword">self</span>, &amp;<span class="hl-keyword">mut</span> Mem::<span class="hl-title function_ invoke__">new</span>(scratch));</code>
+<code></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">data</span> = <span class="hl-keyword">self</span>.raw.<span class="hl-title function_ invoke__">as_mut_ptr</span>();</code>
+<code>  <span class="hl-comment">// Glue the scratch space back in.</span></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">len</span> = <span class="hl-keyword">self</span>.raw.<span class="hl-title function_ invoke__">len</span>() + size;</code>
+<code>  <span class="hl-comment">// This makes miri unhappy, any suggestions? :(</span></code>
+<code>  <span class="hl-keyword">self</span>.raw = <span class="hl-keyword">unsafe</span> { slice::<span class="hl-title function_ invoke__">from_raw_parts_mut</span>(data, len) };</code>
+<code>  res</code>
+<code>}</code></pre>
+
+</figure>
+<p>With this infrastructure in place, we can finally implement bvh construction!
+We’ll do it in three steps:</p>
+
+<ol >  <li>
+<p>Split of half the memory into a scratch space.</p>
+</li>
+  <li>
+<p>Build a dynamically-sized tree in that space, counting leaves and interior nodes.</p>
+</li>
+  <li>
+<p>Allocate arrays of the right size in the permanent space, and copy data over once.</p>
+</li>
+</ol>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">pub</span> <span class="hl-keyword">struct</span> <span class="hl-title class_">Bvh</span>&lt;<span class="hl-symbol">&#x27;m</span>&gt; {</code>
+<code>  splits: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [BvhSplit],</code>
+<code>  leaves: &amp;<span class="hl-symbol">&#x27;m</span> <span class="hl-keyword">mut</span> [BvhLeaf],</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">BvhSplit</span> {</code>
+<code>  children: [<span class="hl-type">u32</span>; <span class="hl-number">2</span>],</code>
+<code>  bb: BoundingBox,</code>
+<code>  axis: <span class="hl-type">u8</span>,</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">BvhLeaf</span> {</code>
+<code>  face: <span class="hl-type">u32</span>,</code>
+<code>  bb: BoundingBox,</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-comment">// Temporary tree we store in the scratch space.</span></code>
+<code><span class="hl-keyword">enum</span> <span class="hl-title class_">Node</span>&lt;<span class="hl-symbol">&#x27;s</span>&gt; {</code>
+<code>  Split {</code>
+<code>    children: [&amp;<span class="hl-symbol">&#x27;s</span> <span class="hl-keyword">mut</span> Node&lt;<span class="hl-symbol">&#x27;s</span>&gt;; <span class="hl-number">2</span>],</code>
+<code>    bb: BoundingBox,</code>
+<code>    axis: <span class="hl-type">u8</span></code>
+<code>  },</code>
+<code>  Leaf { face: <span class="hl-type">u32</span>, bb: BoundingBox },</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span> <span class="hl-title function_">build</span>(</code>
+<code>  mem: &amp;<span class="hl-keyword">mut</span> Mem&lt;<span class="hl-symbol">&#x27;m</span>&gt;,</code>
+<code>  mesh: &amp;Mesh&lt;<span class="hl-symbol">&#x27;m</span>&gt;,</code>
+<code>) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;Bvh&lt;<span class="hl-symbol">&#x27;m</span>&gt;, Oom&gt; {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">free_mem</span> = mem.<span class="hl-title function_ invoke__">free</span>();</code>
+<code>  mem.<span class="hl-title function_ invoke__">with_scratch</span>(free_mem / <span class="hl-number">2</span>, |mem, scratch| {</code>
+<code>    <span class="hl-keyword">let</span> (node, n_splits, n_leaves) =</code>
+<code>      <span class="hl-title function_ invoke__">build_scratch</span>(scratch, mesh);</code>
+<code></code>
+<code>    <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">res</span> = Bvh {</code>
+<code>      splits: mem.<span class="hl-title function_ invoke__">alloc_array_default</span>(n_splits <span class="hl-keyword">as</span> <span class="hl-type">usize</span>)?,</code>
+<code>      leaves: mem.<span class="hl-title function_ invoke__">alloc_array_default</span>(n_leaves <span class="hl-keyword">as</span> <span class="hl-type">usize</span>)?,</code>
+<code>    };</code>
+<code>    <span class="hl-title function_ invoke__">copy</span>(&amp;<span class="hl-keyword">mut</span> res, &amp;node);</code>
+<code></code>
+<code>    <span class="hl-title function_ invoke__">Ok</span>(res)</code>
+<code>  })</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">build_scratch</span>&lt;<span class="hl-symbol">&#x27;s</span>&gt;(</code>
+<code>  mem: &amp;<span class="hl-keyword">mut</span> Mem&lt;<span class="hl-symbol">&#x27;s</span>&gt;,</code>
+<code>  mesh: &amp;Mesh&lt;<span class="hl-symbol">&#x27;_</span>&gt;,</code>
+<code>) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">Result</span>&lt;(&amp;<span class="hl-symbol">&#x27;s</span> <span class="hl-keyword">mut</span> Node&lt;<span class="hl-symbol">&#x27;s</span>&gt;, <span class="hl-type">usize</span>, <span class="hl-type">usize</span>), Oom&gt; {</code>
+<code>  ...</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">copy</span>&lt;<span class="hl-symbol">&#x27;m</span>, <span class="hl-symbol">&#x27;s</span>&gt;(res: &amp;<span class="hl-keyword">mut</span> Bvh&lt;<span class="hl-symbol">&#x27;m</span>&gt;, node: &amp;Node&lt;<span class="hl-symbol">&#x27;s</span>&gt;) {</code>
+<code>  ...</code>
+<code>}</code></pre>
+
+</figure>
+<p>And that’s it!
+The thing actually works, miri complaints notwithstanding!</p>
+</section><section>
+<h2 id="Conclusions">
+<a href="#Conclusions">Conclusions </a>
+</h2>
+
+<p>Actually, I am impressed.
+I was certain that this won’t actually work out, and that I’d have to write copious amount of unsafe to get the runtime behavior I want.
+Specifically, I believed that <code>&amp;'m mut T&lt;'m&gt;</code> variance issue would force my hand to add <code>'m</code>, <code>'mm</code>, <code>'mmm</code> and further lifetimes, but that didn’t happen.
+For “owning” pointers, <code>&amp;'m mut T&lt;'m'&gt;</code> turned out to work fine!
+It’s only when processing you might need extra lifetimes.
+<code>Parser&lt;'m, 'i, 'a&gt;</code> is at least two lifetimes more than I am completely comfortable with, but I guess I can live with that.</p>
+
+<p>I wonder how far this style of programming can be pushed.
+Aesthetically, I quite like that I can tell precisely how much memory the program would use!</p>
+
+<p>Code for the post: <a class="url" href="http://github.com/matklad/crt">http://github.com/matklad/crt</a>.</p>
+
+<p>Discussion on <a href="https://old.reddit.com/r/rust/comments/xx7xci/blog_post_hard_mode_rust/">/r/rust</a>.</p>
+</section>]]></content>
+</entry>
+
+<entry>
+<title type="html">From Paxos to BFT</title>
+<link href="https://matklad.github.io/2022/10/03/from-paxos-to-bft.html" rel="alternate" type="text/html" title="Self Modifying Code" />
+<published>2022-10-03T00:00:00+00:00</published>
+<updated>2022-10-03T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2022/10/03/from-paxos-to-bft</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[This is a sequel to <a href="https://matklad.github.io/2020/11/01/notes-on-paxos.html">Notes on Paxos</a> post.
+Similarly, the primarily goal here is for me to understand why the BFT consensus algorithm works in detail.
+This might, or might not be useful for other people!
+The Paxos article is a prerequisite, best to read that now, and return to this article tomorrow :)]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2022/10/03/from-paxos-to-bft.html"><![CDATA[
+<h1 id="From-Paxos-to-BFT">
+<a href="#From-Paxos-to-BFT">From Paxos to BFT <time datetime="2022-10-03">Oct 3, 2022</time></a>
+</h1>
+
+<p>This is a sequel to <a href="https://matklad.github.io/2020/11/01/notes-on-paxos.html">Notes on Paxos</a> post.
+Similarly, the primarily goal here is for me to understand why the BFT consensus algorithm works in detail.
+This might, or might not be useful for other people!
+The Paxos article is a prerequisite, best to read that now, and return to this article tomorrow :)</p>
+
+<p>Note also that while Paxos was more or less a direct translation of Lamport’s lecture, this post is a mish-mash oft the original BFT paper by Liskov and Castro, my own thinking, and a cursory glance as <a href="https://lamport.azurewebsites.net/tla/byzpaxos.html">this formalization</a>.
+As such, the probability that there are no mistakes here is quite low.</p>
+<section>
+<h2 id="What-is-BFT">
+<a href="#What-is-BFT">What is BFT? </a>
+</h2>
+
+<p>BFT stands for Byzantine Fault Tolerant consensus.
+Similarly to Paxos, we imagine a distributed system of computers communicating over a faulty network which can arbitrary reorder, delay, and drop messages.
+And we want computers to agree on some specific choice of value among the set of possibilities, such that any two computers pick the same value.
+Unlike Paxos though,  we also assume that computers themselves might be faulty or malicious.
+So, we add a new condition to our list of bad things.
+Besides reordering, duplication, delaying and dropping, a fake message can be manufactured out of thin air.</p>
+
+<p>Of course, if absolutely arbitrary messages can be forged, then no consensus is possible — each machine lives in its own solipsistic world which might be completely unlike the world of every other machine.
+So there’s one restriction — messages are cryptographically signed by the senders, and it is assumed that it is impossible for a faulty node to impersonate non-faulty one.</p>
+
+<p>Can we still achieve consensus?
+As long as for each <code>f</code> faulty, malicious nodes, we have at least <code>2f + 1</code> honest ones.</p>
+
+<p>Similarly to the Paxos post, we will capture this intuition into a precise mathematical statement about trajectories of state machines.</p>
+</section><section>
+<h2 id="Paxos-Revisited">
+<a href="#Paxos-Revisited">Paxos Revisited </a>
+</h2>
+
+<p>Our plan is to start with vanilla Paxos, and then patch it to allow byzantine behavior.
+Here’s what we’ve arrived at last time:</p>
+
+<figure class="code-block">
+<figcaption class="title">Paxos</figcaption>
+
+<pre><code>Sets:</code>
+<code>  𝔹       -- Numbered set of ballots (for example, ℕ)</code>
+<code>  𝕍       -- Arbitrary set of values</code>
+<code>  𝔸       -- Finite set of acceptors</code>
+<code>  ℚ ∈ 2^𝔸 -- Set of quorums</code>
+<code></code>
+<code>  -- Sets of messages for each of the four subphases</code>
+<code>  Msgs1a ≡ {type: {"1a"}, bal: 𝔹}</code>
+<code></code>
+<code>  Msgs1b ≡ {type: {"1b"}, bal: 𝔹, acc: 𝔸,</code>
+<code>            vote: {bal: 𝔹, val: 𝕍} ∪ {null}}</code>
+<code></code>
+<code>  Msgs2a ≡ {type: {"2a"}, bal: 𝔹, val: 𝕍}</code>
+<code></code>
+<code>  Msgs2b ≡ {type: {"2b"}, bal: 𝔹, val: 𝕍, acc: 𝔸}</code>
+<code></code>
+<code>Assume:</code>
+<code>  ∀ q1, q2 ∈ ℚ: q1 ∩ q2 ≠ {}</code>
+<code></code>
+<code>Vars:</code>
+<code>  -- Set of all messages sent so far</code>
+<code>  msgs ∈ 2^(Msgs1a ∪ Msgs1b ∪ Msgs2a ∪ Msgs2b)</code>
+<code></code>
+<code>  -- Function that maps acceptors to ballot numbers or -1</code>
+<code>  -- maxBal :: 𝔸 -&gt; 𝔹 ∪ {-1}</code>
+<code>  maxBal ∈ (𝔹 ∪ {-1})^𝔸</code>
+<code></code>
+<code>  -- Function that maps acceptors to their last vote</code>
+<code>  -- lastVote :: 𝔸 -&gt; {bal: 𝔹, val: 𝕍} ∪ {null}</code>
+<code>  lastVote ∈ ({bal: 𝔹, val: 𝕍} ∪ {null})^𝔸</code>
+<code></code>
+<code>Send(m) ≡ msgs' = msgs ∪ {m}</code>
+<code></code>
+<code>Safe(b, v) ≡</code>
+<code>  ∃ q ∈ ℚ:</code>
+<code>  let</code>
+<code>    qmsgs  ≡ {m ∈ msgs: m.type = "1b" ∧ m.bal = b ∧ m.acc ∈ q}</code>
+<code>    qvotes ≡ {m ∈ qmsgs: m.vote ≠ null}</code>
+<code>  in</code>
+<code>      ∀ a ∈ q: ∃ m ∈ qmsgs: m.acc = a</code>
+<code>    ∧ (  qvotes = {}</code>
+<code>       ∨ ∃ m ∈ qvotes:</code>
+<code>             m.vote.val = v</code>
+<code>           ∧ ∀ m1 ∈ qvotes: m1.vote.bal &lt;= m.vote.bal)</code>
+<code></code>
+<code>Phase1a(b) ≡</code>
+<code>    maxBal' = maxBal</code>
+<code>  ∧ lastVote' = lastVote</code>
+<code>  ∧ Send({type: "1a", bal: b})</code>
+<code></code>
+<code>Phase1b(a) ≡</code>
+<code>  ∃ m ∈ msgs:</code>
+<code>      m.type = "1a" ∧ maxBal(a) &lt; m.bal</code>
+<code>    ∧ maxBal' = λ a1 ∈ 𝔸: if a = a1</code>
+<code>                            then m.bal - 1</code>
+<code>                            else maxBal(a1)</code>
+<code>    ∧ lastVote' = lastVote</code>
+<code>    ∧ Send({type: "1b", bal: m.bal, acc: a, vote: lastVote(a)})</code>
+<code></code>
+<code>Phase2a(b, v) ≡</code>
+<code>   ¬∃ m ∈ msgs: m.type = "2a" ∧ m.bal = b</code>
+<code>  ∧ Safe(b, v)</code>
+<code>  ∧ maxBal' = maxBal</code>
+<code>  ∧ lastVote' = lastVote</code>
+<code>  ∧ Send({type: "2a", bal: b, val: v})</code>
+<code></code>
+<code>Phase2b(a) ≡</code>
+<code>  ∃ m ∈ msgs:</code>
+<code>      m.type = "2a" ∧ maxBal(a) &lt; m.bal</code>
+<code>    ∧ maxBal' = λ a1 ∈ 𝔸: if a = a1 then m.bal else maxBal(a1)</code>
+<code>    ∧ lastVote' = λ a1 ∈ 𝔸: if a = a1</code>
+<code>                              then {bal: m.bal, val: m.val}</code>
+<code>                              else lastVote(a1)</code>
+<code>    ∧ Send({type: "2b", bal: m.bal, val: m.val, acc: a})</code>
+<code></code>
+<code>Init ≡</code>
+<code>    msgs = {}</code>
+<code>  ∧ maxBal   = λ a ∈ 𝔸: -1</code>
+<code>  ∧ lastVote = λ a ∈ 𝔸: null</code>
+<code></code>
+<code>Next ≡</code>
+<code>    ∃ b ∈ 𝔹:</code>
+<code>        Phase1a(b) ∨ ∃ v ∈ 𝕍: Phase2a(b, v)</code>
+<code>  ∨ ∃ a ∈ 𝔸:</code>
+<code>        Phase1b(a) ∨ Phase2b(a)</code>
+<code></code>
+<code>chosen ≡</code>
+<code>  {v ∈ V: ∃ q ∈ ℚ, b ∈ 𝔹: AllVotedFor(q, b, v)}</code>
+<code></code>
+<code>AllVotedFor(q, b, v) ≡</code>
+<code>  ∀ a ∈ q: (a, b, v) ∈ votes</code>
+<code></code>
+<code>votes ≡</code>
+<code>  let</code>
+<code>    msgs2b ≡ {m ∈ msgs: m.type = "2b"}</code>
+<code>  in</code>
+<code>    {(m.acc, m.bal, m.val): m ∈ msgs2b}</code></pre>
+
+</figure>
+<p>Our general idea is to add some “evil” acceptors 𝔼 to the mix and allow them sending arbitrary messages, while at the same time making sure that the subset of “good” acceptors continues to run Paxos.
+What makes this complex is that we don’t know which acceptor are good and which are bad.
+So this is our setup</p>
+
+<figure class="code-block">
+
+
+<pre><code>Sets:</code>
+<code>  𝔹       -- Numbered set of ballots (for example, ℕ)</code>
+<code>  𝕍       -- Arbitrary set of values</code>
+<code>  𝔸       -- Finite set of good acceptors</code>
+<code>  𝔼       -- Finite set of evil acceptors</code>
+<code>  𝔸𝔼 ≡ 𝔸 ∪ 𝔼 -- All acceptors</code>
+<code>  ℚ ∈ 2^𝔸𝔼 -- Set of quorums</code>
+<code></code>
+<code>  Msgs1a ≡ {type: {"1a"}, bal: 𝔹}</code>
+<code></code>
+<code>  Msgs1b ≡ {type: {"1b"}, bal: 𝔹, acc: 𝔸𝔼,</code>
+<code>            vote: {bal: 𝔹, val: 𝕍} ∪ {null}}</code>
+<code></code>
+<code>  Msgs2a ≡ {type: {"2a"}, bal: 𝔹, val: 𝕍}</code>
+<code></code>
+<code>  Msgs2b ≡ {type: {"2b"}, bal: 𝔹, val: 𝕍, acc: 𝔸𝔼}</code>
+<code></code>
+<code>Assume:</code>
+<code>  𝔼 ∩ 𝔸 = {}</code>
+<code>  ∀ q1, q2 ∈ ℚ: q1 ∩ q2 ∩ 𝔸 ≠ {}</code></pre>
+
+</figure>
+<p>If previously the quorum condition was “any two quorums have an acceptor in common”, it is now “any two quorums have a good acceptor in common”.
+An alternative way to say that is “a byzantine quorum is a super-set of normal quorum”, which corresponds to the intuition where we are running normal Paxos, and there are just some extra evil guys whom we try to ignore.
+For Paxos, we allowed <code>f</code> faulty out of <code>2f + 1</code> total nodes  with <code>f+1</code> quorums.
+For Byzantine Paxos, we’ll have <code>f</code> byzantine out <code>3f + 1</code> nodes with <code>2f+1</code> quorums.
+As I’ve said, if we forget about byzantine folks, we get exactly <code>f + 1</code> out of <code>2f + 1</code> picture of normal Paxos.</p>
+
+<p>The next step is to determine behavior for byzantine nodes.
+They can send any message, as long as they are the author:</p>
+
+<figure class="code-block">
+
+
+<pre><code>Byzantine(a) ≡</code>
+<code>      ∃ b ∈ 𝔹:             Send({type: "1a", bal: b})</code>
+<code>    ∨ ∃ b ∈ 𝔹, v ∈ 𝕍:      Send({type: "2a", bal: b, val: v})</code>
+<code>    ∨ ∃ b1, b2 ∈ 𝔹, v ∈ 𝕍: Send({type: "1b", bal: b1, acc: a,</code>
+<code>                                  vote: {bal: b2, val: v}})</code>
+<code>    ∨ ∃ b ∈ 𝔹, v ∈ 𝕍:      Send({type: "2b", bal: b, val: v, acc: a})</code>
+<code>  ∧ maxBal' = maxBal</code>
+<code>  ∧ lastVote' = lastVote</code></pre>
+
+</figure>
+<p>That is, a byzantine acceptor can send any <code>1a</code> or <code>2a</code> message at any time, while for <code>1b</code> and <code>2b</code> the author should match.</p>
+
+<p>What breaks?
+The most obvious thing is <code>Phase2b</code>, that is, voting.
+In Paxos, as soon as an acceptor receives a <code>2a</code> message, it votes for it.
+The correctness of Paxos hinges on the <code>Safe</code> check before we send <code>2a</code> message, but a Byzantine node can send an arbitrary <code>2a</code>.</p>
+
+<p>The solution here is natural: rather than blindly trust <code>2a</code> messages, acceptors would themselves double-check the safety condition, and reject the message if it doesn’t hold:</p>
+
+<figure class="code-block">
+
+
+<pre><code>Phase2b(a) ≡</code>
+<code>  ∃ m ∈ msgs:</code>
+<code>      m.type = "2a" ∧ maxBal(a) &lt; m.bal</code>
+<code class="hl-line">    ∧ Safe(m.bal, m.val)</code>
+<code>    ∧ maxBal' = λ a1 ∈ 𝔸: if a = a1 then m.bal else maxBal(a1)</code>
+<code>    ∧ lastVote' = λ a1 ∈ 𝔸: if a = a1</code>
+<code>                              then {bal: m.bal, val: m.val}</code>
+<code>                              else lastVote(a1)</code>
+<code>    ∧ Send({type: "2b", bal: m.bal, val: m.val, acc: a})</code></pre>
+
+</figure>
+<p>Implementation wise, this means that, when a coordinator sends a <code>2a</code>, it also wants to include <code>1b</code> messages proving the safety of <code>2a</code>.
+But in the spec we can just assume that all messages are broadcasted, for simplicity.
+Ideally, for correct modeling you also want to model how each acceptor learns new messages, to make sure that negative reasoning about a certain message <em>not</em> being sent doesn’t creep in, but we’ll avoid that here.</p>
+
+<p>However, just re-checking safety doesn’t fully solve the problem.
+It might be the case that several values are safe at a particular ballot (indeed, in the first ballot any value is safe), and it is exactly the job of a coordinator / <code>2a</code> message to pick one value to break the tie.
+And in our case a byzantine coordinator can send two <code>2a</code> for different valid values.</p>
+
+<p>And here we’ll make the single non-trivial modification to the algorithm.
+Like the <code>Safe</code> condition is at the heart of Paxos, the <code>Confirmed</code> condition is the heart here.</p>
+
+<p>So basically we expect a good coordinator to send just one <code>2a</code> message, but a bad one can send many.
+And we want to somehow distinguish the two cases.
+One way to do that is to broadcast ACKs for <code>2a</code> among acceptors.
+If I received a <code>2a</code> message, checked that the value therein is safe, and also know that everyone else received this same <code>2a</code> message, I can safely vote for the value.</p>
+
+<p>So we introduce a new message type, <code>2ac</code>, which confirms a valid <code>2a</code> message:</p>
+
+<figure class="code-block">
+
+
+<pre><code>Msgs2ac ≡ {type: {"2ac"}, bal: 𝔹, val: 𝕍, acc: 𝔸}</code></pre>
+
+</figure>
+<p>Naturally, evil acceptors can confirm whatever:</p>
+
+<figure class="code-block">
+
+
+<pre><code>Byzantine(a) ≡</code>
+<code>      ∃ b ∈ 𝔹:             Send({type: "1a", bal: b})</code>
+<code>    ∨ ∃ b1, b2 ∈ 𝔹, v ∈ 𝕍: Send({type: "1b", bal: b1, acc: a,</code>
+<code>                                 vote: {bal: b2, val: v}})</code>
+<code>    ∨ ∃ b ∈ 𝔹, v ∈ 𝕍:      Send({type: "2a", bal: b, val: v})</code>
+<code class="hl-line">    ∨ ∃ b ∈ 𝔹, v ∈ 𝕍:      Send({type: "2ac", bal: b, val: v, acc: a})</code>
+<code>    ∨ ∃ b ∈ 𝔹, v ∈ 𝕍:      Send({type: "2b", bal: b, val: v, acc: a})</code>
+<code>  ∧ maxBal' = maxBal</code>
+<code>  ∧ lastVote' = lastVote</code></pre>
+
+</figure>
+<p>But, if we get a quorum of confirmations, we can be sure that no other value will be confirmed in a given ballot (each good acceptors confirms at most a single message in a ballot (and we need a bit of state for that as well))</p>
+
+<figure class="code-block">
+
+
+<pre><code>Confirmed(b, v) ≡</code>
+<code>  ∃ q ∈ ℚ: ∀ a ∈ q: {type: "2ac", bal: b, val: v, acc: a} ∈ msgs</code></pre>
+
+</figure>
+<p>Putting everything so far together, we get</p>
+
+<figure class="code-block">
+<figcaption class="title">Not Yet BFT Paxos</figcaption>
+
+<pre><code>Sets:</code>
+<code>  𝔹          -- Numbered set of ballots (for example, ℕ)</code>
+<code>  𝕍          -- Arbitrary set of values</code>
+<code>  𝔸          -- Finite set of acceptors</code>
+<code class="hl-line">  𝔼          -- Finite set of evil acceptors</code>
+<code class="hl-line">  𝔸𝔼 ≡ 𝔸 ∪ 𝔼 -- Set of all acceptors</code>
+<code class="hl-line">  ℚ ∈ 2^𝔸𝔼   -- Set of quorums</code>
+<code></code>
+<code>  Msgs1a ≡ {type: {"1a"}, bal: 𝔹}</code>
+<code></code>
+<code>  Msgs1b  ≡ {type: {"1b"}, bal: 𝔹, acc: 𝔸,</code>
+<code>             vote: {bal: 𝔹, val: 𝕍} ∪ {null}}</code>
+<code></code>
+<code>  Msgs2a  ≡ {type: {"2a"}, bal: 𝔹, val: 𝕍}</code>
+<code class="hl-line">  Msgs2ac ≡ {type: {"2ac"}, bal: 𝔹, val: 𝕍, acc: 𝔸}</code>
+<code></code>
+<code>  Msgs2b  ≡ {type: {"2b"}, bal: 𝔹, val: 𝕍, acc: 𝔸}</code>
+<code></code>
+<code>Assume:</code>
+<code class="hl-line">  𝔼 ∩ 𝔸 = {}</code>
+<code class="hl-line">  ∀ q1, q2 ∈ ℚ: q1 ∩ q2 ∩ 𝔸 ≠ {}</code>
+<code></code>
+<code>Vars:</code>
+<code>  -- Set of all messages sent so far</code>
+<code>  msgs ∈ 2^(Msgs1a ∪ Msgs1b ∪ Msgs2a ∪ Msgs2ac ∪ Msgs2b)</code>
+<code></code>
+<code>  -- Function that maps acceptors to ballot numbers or -1</code>
+<code>  -- maxBal :: 𝔸 -&gt; 𝔹 ∪ {-1}</code>
+<code>  maxBal ∈ (𝔹 ∪ {-1})^𝔸</code>
+<code></code>
+<code>  -- Function that maps acceptors to their last vote</code>
+<code>  -- lastVote :: 𝔸 -&gt; {bal: 𝔹, val: 𝕍} ∪ {null}</code>
+<code>  lastVote ∈ ({bal: 𝔹, val: 𝕍} ∪ {null})^𝔸</code>
+<code></code>
+<code class="hl-line">  -- Function which maps acceptors to values they confirmed as safe</code>
+<code class="hl-line">  -- confirm :: (𝔸, 𝔹) -&gt; 𝕍 ∪ {null}</code>
+<code class="hl-line">  confirm ∈ (𝕍 ∪ {null})^(𝔸 × 𝔹)</code>
+<code class="hl-line"></code>
+<code>Send(m) ≡ msgs' = msgs ∪ {m}</code>
+<code></code>
+<code>Confirmed(b, v) ≡</code>
+<code class="hl-line">  ∃ q ∈ ℚ: ∀ a ∈ q: {type: "2ac", bal: b, val: v, acc: a} ∈ msgs</code>
+<code class="hl-line"></code>
+<code>Safe(b, v) ≡</code>
+<code>  ∃ q ∈ ℚ:</code>
+<code>  let</code>
+<code>    qmsgs  ≡ {m ∈ msgs: m.type = "1b" ∧ m.bal = b ∧ m.acc ∈ q}</code>
+<code>    qvotes ≡ {m ∈ qmsgs: m.vote ≠ null}</code>
+<code>  in</code>
+<code>      ∀ a ∈ q: ∃ m ∈ qmsgs: m.acc = a</code>
+<code>    ∧ (  qvotes = {}</code>
+<code>       ∨ ∃ m ∈ qvotes:</code>
+<code>             m.vote.val = v</code>
+<code>           ∧ ∀ m1 ∈ qvotes: m1.vote.bal &lt;= m.vote.bal)</code>
+<code></code>
+<code>Byzantine(a) ≡</code>
+<code class="hl-line">      ∃ b ∈ 𝔹:             Send({type: "1a", bal: b})</code>
+<code class="hl-line">    ∨ ∃ b1, b2 ∈ 𝔹, v ∈ 𝕍: Send({type: "1b", bal: b1, acc: a,</code>
+<code class="hl-line">                                 vote: {bal: b2, val: v}})</code>
+<code class="hl-line">    ∨ ∃ b ∈ 𝔹, v ∈ 𝕍:      Send({type: "2a", bal: b, val: v})</code>
+<code class="hl-line">    ∨ ∃ b ∈ 𝔹, v ∈ 𝕍:      Send({type: "2ac", bal: b, val: v, acc: a})</code>
+<code class="hl-line">    ∨ ∃ b ∈ 𝔹, v ∈ 𝕍:      Send({type: "2b", bal: b, val: v, acc: a})</code>
+<code class="hl-line">  ∧ maxBal' = maxBal</code>
+<code class="hl-line">  ∧ lastVote' = lastVote</code>
+<code class="hl-line">  ∧ confirm' = confirm</code>
+<code></code>
+<code>Phase1b(a) ≡</code>
+<code>  ∃ m ∈ msgs:</code>
+<code>      m.type = "1a" ∧ maxBal(a) &lt; m.bal</code>
+<code>    ∧ maxBal' = λ a1 ∈ 𝔸: if a = a1</code>
+<code>                            then m.bal - 1</code>
+<code>                            else maxBal(a1)</code>
+<code>    ∧ lastVote' = lastVote</code>
+<code>    ∧ confirm' = confirm</code>
+<code>    ∧ Send({type: "1b", bal: m.bal, acc: a, vote: lastVote(a)})</code>
+<code class="hl-line"></code>
+<code class="hl-line">Phase2ac(a) ≡</code>
+<code class="hl-line">  ∃ m ∈ msgs:</code>
+<code class="hl-line">      m.type = "2a"</code>
+<code class="hl-line">    ∧ confirm(a, m.bal) = null</code>
+<code class="hl-line">    ∧ Safe(m.bal, m.val)</code>
+<code class="hl-line">    ∧ maxBal' = maxBal</code>
+<code class="hl-line">    ∧ lastVote' = lastVote</code>
+<code class="hl-line">    ∧ confirm' = λ a1 ∈ 𝔸, b1 \in 𝔹:</code>
+<code class="hl-line">                 if a = a1 ∧ b1 = m.bal then m.val else confirm(a1, b1)</code>
+<code class="hl-line">    ∧ Send({type: "2ac", bal: m.bal, val: m.val, acc: a})</code>
+<code></code>
+<code>Phase2b(a) ≡</code>
+<code>  ∃ b ∈ 𝔹, v ∈ 𝕍:</code>
+<code class="hl-line">      Confirmed(b, v)</code>
+<code>    ∧ maxBal' = λ a1 ∈ 𝔸: if a = a1 then m.bal else maxBal(a1)</code>
+<code>    ∧ lastVote' = λ a1 ∈ 𝔸: if a = a1</code>
+<code>                              then {bal: m.bal, val: m.val}</code>
+<code>                              else lastVote(a1)</code>
+<code>    ∧ confirm' = confirm</code>
+<code>    ∧ Send({type: "2b", bal: m.bal, val: m.val, acc: a})</code>
+<code></code>
+<code>Init ≡</code>
+<code>    msgs = {}</code>
+<code>  ∧ maxBal   = λ a ∈ 𝔸: -1</code>
+<code>  ∧ lastVote = λ a ∈ 𝔸: null</code>
+<code>  ∧ confirm = λ a ∈ 𝔸, b ∈ 𝔹: null</code>
+<code></code>
+<code>Next ≡</code>
+<code>    ∃ a ∈ 𝔸:</code>
+<code>        Phase1b(a) ∨ Phase2ac(a) ∨ Phase2b(a)</code>
+<code>  ∨ ∃ a ∈ 𝔼:</code>
+<code>        Byzantine(a)</code>
+<code></code>
+<code>chosen ≡</code>
+<code>  {v ∈ V: ∃ q ∈ ℚ, b ∈ 𝔹: AllVotedFor(q, b, v)}</code>
+<code></code>
+<code>AllVotedFor(q, b, v) ≡</code>
+<code>  ∀ a ∈ q: (a, b, v) ∈ votes</code>
+<code></code>
+<code>votes ≡</code>
+<code>  let</code>
+<code>    msgs2b ≡ {m ∈ msgs: m.type = "2b"}</code>
+<code>  in</code>
+<code>    {(m.acc, m.bal, m.val): m ∈ msgs2b}</code></pre>
+
+</figure>
+<p>In the above, I’ve also removed phases <code>1a</code> and <code>2a</code>, as byzantine acceptors are allowed to send arbitrary messages as well (we’ll need explicit <code>1a</code>/<code>2a</code> for liveness, but we won’t discuss that here).</p>
+
+<p>The most important conceptual addition is <code>Phase2ac</code> – if an acceptor receives a new <code>2a</code> message for some ballot with a safe value, it sends out the confirmation provided that it hadn’t done that already.
+In <code>Phase2b</code> then we can vote for confirmed values: confirmation by a quorum guarantees both that the value is safe at this ballot, and that this is a single value that can be voted for in this ballot (two different values can’d be confirmed in the same ballot, because quorums have an honest acceptor in common).
+This <em>almost</em> works, but there’s still a problem.
+Can you spot it?</p>
+
+<p>The problem is in the <code>Safe</code> condition.
+Recall that the goal of the <code>Safe</code> condition is to pick a value <code>v</code> for ballot <code>b</code>, such that, if any earlier ballot <code>b1</code> concludes, the value chosen in <code>b1</code> would necessary be <code>v</code>.
+The way <code>Safe</code> works for ballot <code>b</code> in normal Paxos is that the coordinator asks a certain quorum to abstain from further voting in ballots earlier than <code>b</code>, collects existing votes, and uses those votes to pick a safe value.
+Specifically, it looks at the vote for the highest-numbered ballot in the set, and declares a value from it as safe (it <em>is</em> safe: it was safe at <em>that</em> ballot, and for all future ballots there’s a quorum which abstained from voting).</p>
+
+<p>This procedure puts a lot of trust in that highest vote, which makes it vulnerable.
+An evil acceptor can just say that it voted in some high ballot, and force a choice of arbitrary value.
+So, we need some independent confirmation that the vote was cast for a safe value.
+And we can re-use <code>2ac</code> messages for this:</p>
+
+<figure class="code-block">
+
+
+<pre><code>Safe(b, v) ≡</code>
+<code>  ∃ q ∈ Q:</code>
+<code>  let</code>
+<code>    qmsgs  ≡ {m ∈ msgs: m.type = "1b" ∧ m.bal = b ∧ m.acc ∈ q}</code>
+<code>    qvotes ≡ {m ∈ qmsgs: m.vote ≠ null}</code>
+<code>  in</code>
+<code>      ∀ a ∈ q: ∃ m ∈ qmsgs: m.acc = a</code>
+<code>   ∧ (  qvotes = {}</code>
+<code>       ∨ ∃ m ∈ qvotes:</code>
+<code>             m.vote.val = v</code>
+<code>           ∧ ∀ m1 ∈ qvotes: m1.vote.bal &lt;= m.vote.bal</code>
+<code class="hl-line">           ∧ Confirmed(m.vote.bal, v))</code></pre>
+
+</figure>
+<p>And … that’s it, really.
+Now we can sketch a proof that this thing indeed achieves BFT consensus, because it actually models normal Paxos among non-byzantine acceptors.</p>
+
+<p>Phase1a messages of Paxos are modeled by Phase1a messages of BFT Paxos, as they don’t have any preconditions, the same goes for Phase1b.
+Phase2a message of Paxos is emitted when a value becomes confirmed in BFT Paxos.
+This is correct modeling, because BFT’s Safe condition models normal Paxos Safe condition (this … is a bit inexact I think, to make this exact, we want to separate “this value is safe” from “we are voting for this value” in original Paxos as well).
+Finally, Phase2b also displays direct correspondence.</p>
+
+<p>As a final pop-quiz, I claim that the <code>Confirmed(m.vote.bal, v)</code> condition in <code>Safe</code> above can be relaxed.
+As stated, <code>Confirmed</code> needs a byzantine quorum of confirmations, which guarantees both that the value is safe and that it is the single confirmed value, which is a bit more than we need here.
+Do you see what would be enough?</p>
+
+<p>The final specification contains this relaxation:</p>
+
+<figure class="code-block">
+<figcaption class="title">BFT Paxos</figcaption>
+
+<pre><code>Sets:</code>
+<code>  𝔹          -- Numbered set of ballots (for example, ℕ)</code>
+<code>  𝕍          -- Arbitrary set of values</code>
+<code>  𝔸          -- Finite set of acceptors</code>
+<code>  𝔼          -- Finite set of evil acceptors</code>
+<code>  𝔸𝔼 ≡ 𝔸 ∪ 𝔼 -- Set of all acceptors</code>
+<code>  ℚ ∈ 2^𝔸𝔼   -- Set of quorums</code>
+<code>  𝕎ℚ ∈ 2^𝔸𝔼  -- Set of weak quorums</code>
+<code></code>
+<code>  Msgs1a ≡ {type: {"1a"}, bal: 𝔹}</code>
+<code></code>
+<code>  Msgs1b  ≡ {type: {"1b"}, bal: 𝔹, acc: 𝔸𝔼,</code>
+<code>             vote: {bal: 𝔹, val: 𝕍} ∪ {null}}</code>
+<code></code>
+<code>  Msgs2a  ≡ {type: {"2a"}, bal: 𝔹, val: 𝕍}</code>
+<code>  Msgs2ac ≡ {type: {"2ac"}, bal: 𝔹, val: 𝕍, acc: 𝔸𝔸𝔼}</code>
+<code></code>
+<code>  Msgs2b  ≡ {type: {"2b"}, bal: 𝔹, val: 𝕍, acc: 𝔸𝔸𝔼}</code>
+<code></code>
+<code>Assume:</code>
+<code>  𝔼 ∩ 𝔸 = {}</code>
+<code>  ∀ q1, q2 ∈ ℚ: q1 ∩ q2 ∩ 𝔸 ≠ {}</code>
+<code>  ∀ q ∈ 𝕎ℚ: q ∩ 𝔸 ≠ {}</code>
+<code></code>
+<code>Vars:</code>
+<code>  -- Set of all messages sent so far</code>
+<code>  msgs ∈ 2^(Msgs1a ∪ Msgs1b ∪ Msgs2a ∪ Msgs2ac ∪ Msgs2b)</code>
+<code></code>
+<code>  -- Function that maps acceptors to ballot numbers or -1</code>
+<code>  -- maxBal :: 𝔸 -&gt; 𝔹 ∪ {-1}</code>
+<code>  maxBal ∈ (𝔹 ∪ {-1})^𝔸</code>
+<code></code>
+<code>  -- Function that maps acceptors to their last vote</code>
+<code>  -- lastVote :: 𝔸 -&gt; {bal: 𝔹, val: 𝕍} ∪ {null}</code>
+<code>  lastVote ∈ ({bal: 𝔹, val: 𝕍} ∪ {null})^𝔸</code>
+<code></code>
+<code>  -- Function which maps acceptors to values they confirmed as safe</code>
+<code>  -- confirm :: (𝔸, 𝔹) -&gt; 𝕍 ∪ {null}</code>
+<code>  confirm ∈ (𝕍 ∪ {null})^(𝔸 × 𝔹)</code>
+<code></code>
+<code>Send(m) ≡ msgs' = msgs ∪ {m}</code>
+<code></code>
+<code>Safe(b, v) ≡</code>
+<code>  ∃ q ∈ ℚ:</code>
+<code>  let</code>
+<code>    qmsgs  ≡ {m ∈ msgs: m.type = "1b" ∧ m.bal = b ∧ m.acc ∈ q}</code>
+<code>    qvotes ≡ {m ∈ qmsgs: m.vote ≠ null}</code>
+<code>  in</code>
+<code>      ∀ a ∈ q: ∃ m ∈ qmsgs: m.acc = a</code>
+<code>    ∧ (  qvotes = {}</code>
+<code>       ∨ ∃ m ∈ qvotes:</code>
+<code>             m.vote.val = v</code>
+<code>           ∧ ∀ m1 ∈ qvotes: m1.vote.bal &lt;= m.vote.bal</code>
+<code>           ∧ confirmedWeak(m.vote.val, v))</code>
+<code></code>
+<code>Confirmed(b, v) ≡</code>
+<code>  ∃ q ∈ ℚ: ∀ a ∈ q: {type: "2ac", bal: b, val: v, acc: a} ∈ msgs</code>
+<code></code>
+<code>ConfirmedWeak(b, v) ≡</code>
+<code>  ∃ q ∈ 𝕎ℚ: ∀ a ∈ q: {type: "2ac", bal: b, val: v, acc: a} ∈ msgs</code>
+<code></code>
+<code>Byzantine(a) ≡</code>
+<code>      ∃ b ∈ 𝔹:             Send({type: "1a", bal: b})</code>
+<code>    ∨ ∃ b1, b2 ∈ 𝔹, v ∈ 𝕍: Send({type: "1b", bal: b1, acc: a,</code>
+<code>                                 vote: {bal: b2, val: v}})</code>
+<code>    ∨ ∃ b ∈ 𝔹, v ∈ 𝕍:      Send({type: "2a", bal: b, val: v})</code>
+<code>    ∨ ∃ b ∈ 𝔹, v ∈ 𝕍:      Send({type: "2ac", bal: b, val: v, acc: a})</code>
+<code>    ∨ ∃ b ∈ 𝔹, v ∈ 𝕍:      Send({type: "2b", bal: b, val: v, acc: a})</code>
+<code>  ∧ maxBal' = maxBal</code>
+<code>  ∧ lastVote' = lastVote</code>
+<code>  ∧ confirm' = confirm</code>
+<code></code>
+<code>Phase1b(a) ≡</code>
+<code>  ∃ m ∈ msgs:</code>
+<code>      m.type = "1a" ∧ maxBal(a) &lt; m.bal</code>
+<code>    ∧ maxBal' = λ a1 ∈ 𝔸: if a = a1</code>
+<code>                            then m.bal - 1</code>
+<code>                            else maxBal(a1)</code>
+<code>    ∧ lastVote' = lastVote</code>
+<code>    ∧ confirm' = confirm</code>
+<code>    ∧ Send({type: "1b", bal: m.bal, acc: a, vote: lastVote(a)})</code>
+<code></code>
+<code>Phase2ac(a) ≡</code>
+<code>  ∃ m ∈ msgs:</code>
+<code>      m.type = "2a"</code>
+<code>    ∧ confirm(a, m.bal) = null</code>
+<code>    ∧ Safe(m.bal, m.val)</code>
+<code>    ∧ maxBal' = maxBal</code>
+<code>    ∧ lastVote' = lastVote</code>
+<code>    ∧ confirm' = λ a1 ∈ 𝔸, b1 \in 𝔹:</code>
+<code>                 if a = a1 ∧ b1 = m.bal then m.val else confirm(a1, b1)</code>
+<code>    ∧ Send({type: "2ac", bal: m.bal, val: m.val, acc: a})</code>
+<code></code>
+<code>Phase2b(a) ≡</code>
+<code>  ∃ b ∈ 𝔹, v ∈ 𝕍:</code>
+<code>      confirmed(b, v)</code>
+<code>    ∧ maxBal' = λ a1 ∈ 𝔸: if a = a1 then m.bal else maxBal(a1)</code>
+<code>    ∧ lastVote' = λ a1 ∈ 𝔸: if a = a1</code>
+<code>                              then {bal: m.bal, val: m.val}</code>
+<code>                              else lastVote(a1)</code>
+<code>    ∧ confirm' = confirm</code>
+<code>    ∧ Send({type: "2b", bal: m.bal, val: m.val, acc: a})</code>
+<code></code>
+<code>Init ≡</code>
+<code>    msgs = {}</code>
+<code>  ∧ maxBal   = λ a ∈ 𝔸: -1</code>
+<code>  ∧ lastVote = λ a ∈ 𝔸: null</code>
+<code>  ∧ confirm = λ a ∈ 𝔸, b ∈ 𝔹: null</code>
+<code></code>
+<code>Next ≡</code>
+<code>    ∃ b ∈ 𝔹:</code>
+<code>        Phase1a(b) ∨ ∃ v ∈ 𝕍: Phase2a(b, v)</code>
+<code>  ∨ ∃ a ∈ 𝔸:</code>
+<code>        Phase1b(a) ∨ Phase2ac(a) ∨ Phase2b(a)</code>
+<code>  ∨ ∃ a ∈ 𝔼:</code>
+<code>        Byzantine(a)</code>
+<code></code>
+<code>chosen ≡</code>
+<code>  {v ∈ V: ∃ q ∈ ℚ, b ∈ 𝔹: AllVotedFor(q, b, v)}</code>
+<code></code>
+<code>AllVotedFor(q, b, v) ≡</code>
+<code>  ∀ a ∈ q: (a, b, v) ∈ votes</code>
+<code></code>
+<code>votes ≡</code>
+<code>  let</code>
+<code>    msgs2b ≡ {m ∈ msgs: m.type = "2b"}</code>
+<code>  in</code>
+<code>    {(m.acc, m.bal, m.val): m ∈ msgs2b}</code></pre>
+
+</figure>
+<p>TLA+ specs for this post are available here: <a class="url" href="https://github.com/matklad/paxosnotes">https://github.com/matklad/paxosnotes</a>.</p>
+</section>]]></content>
+</entry>
+
+<entry>
+<title type="html">Almost Rules</title>
+<link href="https://matklad.github.io/2022/07/10/almost-rules.html" rel="alternate" type="text/html" title="Self Modifying Code" />
+<published>2022-07-10T00:00:00+00:00</published>
+<updated>2022-07-10T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2022/07/10/almost-rules</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[This is going to be a philosophical post, vaguely about language design, and vaguely about Rust.
+If you’ve been following this blog for a while, you know that one theme I consistently hammer at is that of boundaries.
+This article is no exception!]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2022/07/10/almost-rules.html"><![CDATA[
+<h1 id="Almost-Rules">
+<a href="#Almost-Rules">Almost Rules <time datetime="2022-07-10">Jul 10, 2022</time></a>
+</h1>
+
+<p>This is going to be a philosophical post, vaguely about language design, and vaguely about Rust.
+If you’ve been following this blog for a while, you know that one theme I consistently hammer at is that of boundaries.
+This article is no exception!</p>
+
+<p>Obligatory link to Ted Kaminski:</p>
+
+<p><a class="url" href="https://www.tedinski.com/2018/02/06/system-boundaries.html">https://www.tedinski.com/2018/02/06/system-boundaries.html</a></p>
+
+<p>The most important boundary for a software project is its external interface, that which the users directly interact with and which you give backwards compatibility guarantees for.
+For a web-service, this would be the URL scheme and the shape of JSON request and responses.
+For a command line application — the set and the meaning of command-line flags.
+For an OS kernel — the set of syscalls (Linux) or the blessed user-space libraries (Mac).
+And, for a programming language, this would be the definition of the language itself, its syntax and semantics.</p>
+
+<p>Sometimes, however, it is beneficial to install somewhat artificial, internal boundaries, a sort-of macro level layers pattern.
+Boundaries have a high cost.
+They prevent changes.
+But a skillfully placed internal (or even an artificial external) boundary can also help.</p>
+
+<p>It cuts the system in two, and, if the cut is relatively narrow in comparison to the overall size of the system (hourglass shape), this boundary becomes a great way to understand the system.
+Understanding <em>just</em> the boundary allows you to imagine how the subsystem beneath it <em>could</em> be implemented.
+Most of the time, your imaginary version would be pretty close to what actually happens, and this mental map would help you a great deal to peel off the layers of glue code and get a gut feeling for where the core logic is.</p>
+
+<p>Even if an internal boundary starts out in the right place, it, unlike an external one, is ever in danger of being violated.
+“Internal boundary” is a very non-physical thing, most of the time it’s just informal rules like “module A shall not import module B”.
+It’s very hard to notice that something is <em>not</em> being done!
+That’s why, I think, larger companies can benefit from microservices architecture: in theory, if we <em>just</em> solve human coordination problem, a monolith can be architectured just as cleanly, while offering much better performance.
+In practice, at sufficient scale, maintaining good architecture across teams is hard, and becomes much easier if the intended internal boundaries are reified as processes.</p>
+
+<p>It’s hard enough to protect from accidental breaching of internal boundaries.
+But there’s a bigger problem: often, internal boundaries stand in the way of user-visible system features, and it takes a lot of authority to protect internal system’s boundary at the cost of not shipping something.</p>
+
+<p>In this post, I’d want to catalog some of the cases I’ve seen in the Rust programming language where I think an internal boundaries were eroded with time.</p>
+<section>
+<h2 id="Namespaces">
+<a href="#Namespaces">Namespaces </a>
+</h2>
+
+<p>It’s a somewhat obscure feature of Rust’s name resolution, but various things that inhabit Rust’s scopes (structs, modules, traits, variables) are split into three namespaces: types, values and macros.
+This allows to have two things with the same name in the same scope without causing conflicts:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">x</span> { }</code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">x</span>() {}</code></pre>
+
+</figure>
+<p>The above is legal Rust, because the <code>x</code> struct lives in the types namespace, while the <code>x</code> <em>function</em> lives in the values namespace.
+The namespaces are reflected syntactically: <code>.</code> is used to traverse value namespace, while <code>::</code> traverses types.</p>
+
+<p>Except that this is <em>almost</em> a rule.
+There are some cases where compiler gives up on clear syntax-driven namespacing rules and just does ad-hoc disambiguation.
+For example:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">use</span> std::<span class="hl-type">str</span>;</code>
+<code></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">main</span>() {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">s</span>: &amp;<span class="hl-type">str</span> = <span class="hl-type">str</span>::<span class="hl-title function_ invoke__">from_utf8</span>(<span class="hl-string">b&quot;hello&quot;</span>).<span class="hl-title function_ invoke__">unwrap</span>();</code>
+<code>  <span class="hl-type">str</span>::<span class="hl-title function_ invoke__">len</span>(s);</code>
+<code>}</code></pre>
+
+</figure>
+<p>Here, the <code>str</code> in <code>&amp;str</code> and <code>str::len</code> is the <code>str</code> <em>type</em>, from the type namespace.
+The two other <code>str</code>s are the <code>str</code> <em>module</em>.
+In other words, the <code>str::len</code> is a method of a <code>str</code> type, while <code>str::from_utf8</code> is a free-standing function in the <code>str</code> module.
+Like types, modules inhabit the types namespace, so normally the code here would cause a compilation error.
+Compiler (and rust-analyzer) just hacks the primitive types case.</p>
+
+<p>Another recently added case is that of const generics.
+Previously, the <code>T</code> in <code>foo::&lt;T&gt;()</code> was a syntactically-unambiguous reference to something from the types namespace.
+Today, it can refer either to a type or to a value.
+This begs the question: is splitting type and value namespaces a good idea?
+If we have to disambiguate anyway, perhaps we could have just a single namespace and avoid introducing second lookup syntax?
+That is, just <code>use std.collections.HashMap;</code>.</p>
+
+<p>I <em>think</em> these namespace aspirations re-enact similar developments from C.
+I haven’t double checked my history here, so take the following with the grain of salt and do your own research before quoting, but I <em>think</em> that C, in the initial versions, used to have very strict syntactic separation between types and values.
+That’s why you are required to write <code>struct</code> when declaring a local variable of struct type:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-class"><span class="hl-keyword">struct</span> <span class="hl-title">foo</span> {</span> <span class="hl-type">int</span> a; };</code>
+<code></code>
+<code><span class="hl-type">int</span> <span class="hl-title function_">main</span><span class="hl-params">(<span class="hl-type">void</span>)</span> {</code>
+<code>  <span class="hl-class"><span class="hl-keyword">struct</span> <span class="hl-title">foo</span> <span class="hl-title">x</span>;</span></code>
+<code>  <span class="hl-keyword">return</span> <span class="hl-number">0</span>;</code>
+<code>}</code></pre>
+
+</figure>
+<p>The <code>struct</code> keyword tells the parser that it is parsing a type, and, therefore a declaration.
+But then at a latter point typedefs were added, and so the parser was taught to disambiguate types and values via the the lexer hack:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-class"><span class="hl-keyword">struct</span> <span class="hl-title">foo</span> {</span></code>
+<code>  <span class="hl-type">int</span> a;</code>
+<code>};</code>
+<code><span class="hl-keyword">typedef</span> <span class="hl-class"><span class="hl-keyword">struct</span> <span class="hl-title">foo</span> <span class="hl-title">bar</span>;</span></code>
+<code></code>
+<code><span class="hl-type">int</span> <span class="hl-title function_">main</span><span class="hl-params">(<span class="hl-type">void</span>)</span> {</code>
+<code>  bar x;</code>
+<code>  <span class="hl-keyword">return</span> <span class="hl-number">0</span>;</code>
+<code>}</code></pre>
+
+</figure></section><section>
+<h2 id="Patterns-and-Expressions">
+<a href="#Patterns-and-Expressions">Patterns and Expressions </a>
+</h2>
+
+<p>Rust has separate grammatical categories for patterns and expressions.
+It used to be the case that any utterance can be unambiguously classified, depending solely on the syntactic context, as either an expression or a pattern.
+But then a minor exception happened:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">f</span>(value: <span class="hl-type">Option</span>&lt;<span class="hl-type">i32</span>&gt;) {</code>
+<code>  <span class="hl-keyword">match</span> value {</code>
+<code>    <span class="hl-literal">None</span> =&gt; (),</code>
+<code>    none =&gt; (),</code>
+<code>  }</code>
+<code>}</code></pre>
+
+</figure>
+<p>Syntactically, <code>None</code> and <code>none</code> are indistinguishable.
+But they play quite different roles: <code>None</code> refers to the <code>Option::None</code> constant, while <code>none</code> introduces a fresh binding into the scope.
+Swift elegantly disambiguates the two at the syntax level, by requiring a leading <code>.</code> for enum variants.
+Rust just hacks this at the name-resolution layer, by defaulting to a new binding unless there’s a matching constant in the scope.</p>
+
+<p>Recently, the scope of the hack was increased greatly: with destructing assignment implemented, an expression can be re-classified as a pattern now:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">let</span> (<span class="hl-keyword">mut</span> a, <span class="hl-keyword">mut</span> b) = (<span class="hl-number">0</span>, <span class="hl-number">1</span>);</code>
+<code>(a, b) = (b, a)</code></pre>
+
+</figure>
+<p>Syntactically, <code>=</code> is a binary expression, so both the left hand side and the right hand side are expressions.
+But now the <code>lhs</code> is re-interpreted as a pattern.</p>
+
+<p>So perhaps the syntactic boundary between expressions and patterns is a fake one, and we should have used unified expression syntax throughout?</p>
+</section><section>
+<h2 id="::">
+<a href="#::"><code>::&lt;&gt;</code> </a>
+</h2>
+
+<p>A boundary which stands intact is the class of the grammar.
+Rust is still an <code>LL(k)</code> language: it can be parsed using a straightforward single-pass algorithm which doesn’t require backtracking.
+The cost of this boundary is that we have to type <code>.collect::&lt;Vec&lt;_&gt;&gt;()</code> rather than <code>.collect&lt;Vec&lt;_&gt;&gt;()</code> (nowadays, I type just <code>.collect()</code> and use the light-bulb to fill-in the turbofish).</p>
+</section><section>
+<h2 id="00">
+<a href="#00"><code>().0.0</code> </a>
+</h2>
+
+<p>Another recent development is the erosion of the boundary between the lexer and the parser.
+Rust has tuple structs, and uses <code>.0</code> cutesy syntax to access numbered field.
+This is problematic for nested tuple struct.
+They need syntax like <code>foo.1.2</code>, but to the lexer this string looks like three tokens: <code>foo</code>, <code>.</code>, <code>1.2</code>.
+That is, <code>1.2</code> is a floating point number, <code>6/5</code>.
+So, historically one had to write this expression as <code>foo.1 .2</code>, with a meaningful whitespace.</p>
+
+<p>Today, this is hacked in the parser, which takes the <code>1.2</code> token from the lexer, inspects its text and further breaks it up into <code>1</code>, <code>.</code> and <code>2</code> tokens.</p>
+
+<p>The last example is quite interesting: in Rust, unlike many programming languages, the separation between the lexer and the parser is not an arbitrary internal boundary, but is actually a part of an external, semver protected API.
+Tokens are the input to macros, so macro behavior depends on how exactly the input text is split into tokens.</p>
+
+<p>And there’s a second boundary violation here: in theory, “token” as seen by a macro is just its text plus hygiene info.
+In practice though, to implement captures in macro by example (<code>$x:expr</code> things), a token could also be a fully-formed fragment of internal compiler’s AST data structure.
+The API is carefully future proofed such that, as soon as the macro looks at such a magic token, it gets decomposed into underlying true tokens, but there are some examples where the internal details leak via changes in observable behavior.</p>
+</section><section>
+<h2 id="Lifetime-Parametricity">
+<a href="#Lifetime-Parametricity">Lifetime Parametricity </a>
+</h2>
+
+<p>To end this on a more positive note, here’s one pretty important internal boundary which is holding up pretty well.
+In Rust, lifetimes don’t affect code generation.
+In fact, lifetimes are fully stripped from the data which is passed to codegen.
+This is pretty important: although the inferred lifetimes are opaque and hard to reason about, you can be sure that, for example, the exact location where a value is dropped is independent from the whims of the borrow checker.</p>
+<hr />
+<p>Conclusion: not really? It seems that we are generally overly-optimistic about internal boundaries, and they seem to crumble under the pressure of feature requests, unless the boundary in question is physically reified (please don’t take this as an endorsement of microservice architecture for compilers).</p>
+</section>]]></content>
+</entry>
+
+<entry>
+<title type="html">Unit and Integration Tests</title>
+<link href="https://matklad.github.io/2022/07/04/unit-and-integration-tests.html" rel="alternate" type="text/html" title="Self Modifying Code" />
+<published>2022-07-04T00:00:00+00:00</published>
+<updated>2022-07-04T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2022/07/04/unit-and-integration-tests</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[In this post I argue that integration-vs-unit is a confused, and harmful, distinction.
+I provide a more useful two-dimensional mental model instead.
+The model is descriptive (it allows to think more clearly about any test), but I also include my personal prescriptions (the model shows metrics which are and aren’t worth optimizing).]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2022/07/04/unit-and-integration-tests.html"><![CDATA[
+<h1 id="Unit-and-Integration-Tests">
+<a href="#Unit-and-Integration-Tests">Unit and Integration Tests <time datetime="2022-07-04">Jul 4, 2022</time></a>
+</h1>
+
+<p>In this post I argue that integration-vs-unit is a confused, and harmful, distinction.
+I provide a more useful two-dimensional mental model instead.
+The model is descriptive (it allows to think more clearly about any test), but I also include my personal prescriptions (the model shows metrics which are and aren’t worth optimizing).</p>
+
+<p>Credit for the idea goes to the <a href="https://abseil.io/resources/swe-book">SWE book</a>.
+I always felt that integration versus unit debate is confused, the book helped me to formulate in which way exactly.</p>
+
+<p>I won’t actually rigorously demonstrate the existing confusion — I find it self-evident.
+As just two examples:</p>
+
+<ul >  <li>
+<p>Unit-testing is used as a synonym with automated testing (x-unit frameworks).</p>
+</li>
+  <li>
+<p>Cargo uses “unit” and “integration” terminology to describe Rust-specific properties of the compilation model, which is orthogonal to the traditional, however fuzzy, meaning of this terms.</p>
+</li>
+</ul>
+
+<p>Most of the time, it’s more productive to speak about just “tests”, or maybe “automated tests”, rather than argue where something should be considered a unit or an integration tests.</p>
+
+<p>But I argue that a useful, more precise classification exists.</p>
+<section>
+<h2 id="Purity">
+<a href="#Purity">Purity </a>
+</h2>
+
+<p><em>The first</em> axis of classification is, broadly speaking, performance.
+“How much time would a thousand of similar tests take?” is a very useful metric.
+The dependency between the time from making an edit to getting the test results and most other interesting metrics in software (performance, time to fix defects, security) is super-linear.
+Tests longer than attention span obliterate productivity.</p>
+
+<p>It’s useful to take a closer look at what constitutes a performant test.
+One non-trivial observation here is that test speed is categorical, rather than numerical.
+Certain tests are order-of-magnitude slower than others.
+Consider the following list:</p>
+
+<ol >  <li>
+<p>Single-threaded pure computation</p>
+</li>
+  <li>
+<p>Multi-threaded parallel computation</p>
+</li>
+  <li>
+<p>Multi-threaded concurrent computation with time-based synchronization and access to disk</p>
+</li>
+  <li>
+<p>Multi-process computation</p>
+</li>
+  <li>
+<p>Distributed computation</p>
+</li>
+</ol>
+
+<p>Each step of this ladder adds half-an-order of magnitude to test’s runtime.</p>
+
+<p>Time is not the only thing affected — the higher you go, the bigger is the fraction of flaky tests.
+It’s nay impossible to make a test for a pure function flaky.
+If you add threads into the mix, keeping flakiness out requires some careful thinking about synchronization.
+And if the tests spans several processes, it is almost bound to fail under some more unusual circumstances.</p>
+
+<p>Yet another effect we observe along this axis is resilience to unrelated changes.
+The more of operating system and other processes is involved in the test, the higher is the probability that some upgrade somewhere breaks something.</p>
+
+<p>I think the “purity” concept from functional programming is a good way to generalize this axis of the differences between the tests.
+Pure test do little-to-no IO, they are independent of timings and environment.
+Less pure tests do more of the impure things.
+Purity is correlated with performance, repeatability and stability.
+Test purity is non-binary, but it is mostly discrete.
+Threads, time, file-system, network, processes are the notches to think about.</p>
+</section><section>
+<h2 id="Extent">
+<a href="#Extent">Extent </a>
+</h2>
+
+<p><em>The second</em> axis is the fraction of the code which gets exercised, potentially indirectly, by the test.
+Does the test exercise only the business logic module, or is the database API and the HTTP handling also required?
+This is <em>distinct</em> from performance: running more code doesn’t mean that the code will run slower.
+An infinite loop takes very little code.
+What affects performance is not whether tests for business logic touch persistence, but whether, in tests, persistence is backed by an in-memory hash-map or by an out-of-process database server.</p>
+
+<p>The “extent” of the tests is a good indicator of the overall architecture of the application, but usually it isn’t a worthy metric to optimize by itself.
+On the contrary, artificially limiting the extent of tests by mocking your own code (as opposed to mocking impure IO) reduces fidelity of the tests, and makes the code more brittle in the face of refactors.</p>
+
+<p>One potential exception here is the impact on compilation time.
+In a layered application <code>A &lt; B &lt; C</code>, it’s possible to test <code>A</code> either through its interface to <code>B</code> (small-extent test) or by driving <code>A</code> indirectly through <code>C</code>.
+The latter has a problem that, after changing <code>A</code>, running tests might require, depending on the language, rebuilding <code>B</code> and <code>C</code> as well.</p>
+<hr />
+<p>Summing up:</p>
+
+<ul >  <li>
+<p>Don’t think about tests in terms of opposition between unit and integration, whatever that means. Instead,</p>
+</li>
+  <li>
+<p>Think in terms of test’s <strong><strong>purity</strong></strong> and <strong><strong>extent</strong></strong>.</p>
+</li>
+  <li>
+<p><strong><strong>Purity</strong></strong> corresponds to the amount of generalized IO the test is doing and is correlated with desirable metrics, namely performance and resilience.</p>
+</li>
+  <li>
+<p><strong><strong>Extent</strong></strong> corresponds to the amount of code the test exercises. Extent somewhat correlates with impurity, but generally does not directly affect performance.</p>
+</li>
+</ul>
+
+<p>And, the prescriptive part:</p>
+
+<ul >  <li>
+<p>Ruthlessly optimize purity, moving one step down on the ladder of impurity gives huge impact.</p>
+</li>
+  <li>
+<p>Generally, just let the tests have their natural extent. Extent isn’t worth optimizing by itself, but it can tell you something about your application’s architecture.</p>
+</li>
+</ul>
+
+<p>If you enjoyed this post, you might like <a href="https://matklad.github.io/2021/05/31/how-to-test.html">“How to Test”</a> as well.
+It goes further in the prescriptive direction, but, when writing it, I didn’t have the two dimensional purity-extent vocabulary yet.</p>
+<hr />
+<p>As I’ve said, this framing is lifted from the SWE book.
+There are two differences, one small and one big.
+The small difference is that the book uses “size” terminology in place of “purity”.
+The big difference is that the second axis is different: rather than looking at which fraction code gets exercised by the test, the book talks about test “scope”: how large is the bit we are actually testing?</p>
+
+<p>I do find scope concept useful to think about!
+And, unlike extent, keeping most tests focused is a good active prescriptive advice.</p>
+
+<p>I however find the scope concept a bit too fuzzy for actual classification.</p>
+
+<p>Consider this test from rust-analyzer, which checks that we can complete a method from a trait if the trait is implemented:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-meta">#[test]</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">completes_trait_method</span>() {</code>
+<code>    <span class="hl-title function_ invoke__">check</span>(</code>
+<code>        <span class="hl-string">r&quot;</span></code>
+<code><span class="hl-string">struct S {}</span></code>
+<code><span class="hl-string">pub trait T {</span></code>
+<code><span class="hl-string">    fn f(&amp;self)</span></code>
+<code><span class="hl-string">}</span></code>
+<code><span class="hl-string">impl T for S {}</span></code>
+<code><span class="hl-string"></span></code>
+<code><span class="hl-string">fn main(s: S) {</span></code>
+<code><span class="hl-string">    s.$0</span></code>
+<code><span class="hl-string">}</span></code>
+<code><span class="hl-string">&quot;</span>,</code>
+<code>        expect![[<span class="hl-string">r#&quot;</span></code>
+<code><span class="hl-string">            me f() (as T) fn(&amp;self)</span></code>
+<code><span class="hl-string">        &quot;#</span>]],</code>
+<code>    );</code>
+<code>}</code></pre>
+
+</figure>
+<p>I struggle with determining the scope of this test.
+On the one hand, this clearly tests very narrow, very specific scenario.
+On the other hand, to make this work, all the layers of the system have to work just right.
+The lexer, the parser, name resolution and type checking all have to be prepared for incomplete code.
+This test tests not so much the completion logic itself, as all the underlying infrastructure for semantic analysis.</p>
+
+<p>The test is very easy to classify in the purity/extent framework.
+It’s 100% pure — no IO, just a single thread.
+It has maximal extent — the tests exercises the bulk of the rust-analyzer codebase, the only thing that isn’t touched here is the LSP itself.</p>
+
+<p>Also, as a pitch for the  <a href="https://matklad.github.io/2021/05/31/how-to-test.html">“How to Test”</a> post, take a second to appreciate how simple the test is, considering that it tests an error-resilient, highly incremental compiler :)</p>
+</section>]]></content>
+</entry>
+
+<entry>
+<title type="html">Notes on GATs</title>
+<link href="https://matklad.github.io/2022/06/29/notes-on-gats.html" rel="alternate" type="text/html" title="Self Modifying Code" />
+<published>2022-06-29T00:00:00+00:00</published>
+<updated>2022-06-29T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2022/06/29/notes-on-gats</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[There’s a bit of discussion happening in Rust community on the generic associated types topic.
+I can not help but add my own thoughts to the pile :-)]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2022/06/29/notes-on-gats.html"><![CDATA[
+<h1 id="Notes-on-GATs">
+<a href="#Notes-on-GATs">Notes on GATs <time datetime="2022-06-29">Jun 29, 2022</time></a>
+</h1>
+
+<p>There’s a bit of discussion happening in Rust community on the generic associated types topic.
+I can not help but add my own thoughts to the pile :-)</p>
+
+<p>I don’t intend to write a well-edited post considering all pros and cones (intentional typo to demonstrate how unedited this is).
+Rather, I just want to dump my experience as is.
+Ultimately I trust the lang team to make the right call here <strong><strong>way</strong></strong> more than I trust myself.
+The post could be read as a bit inflammatory, but my stated goal here is not to sway someone’s mind by the arguments, but rather expose my own thinking process.</p>
+
+<p>This post is partially prompted by the following comment from the RFC:</p>
+
+<figure class="blockquote">
+<blockquote>
+<p>I probably have GATs in every project I do write.</p>
+</blockquote>
+
+</figure>
+
+<p>It stuck with me, because this is very much the opposite of the experience I have.
+I’ve been using Rust extensively for a while, mostly as an application (as opposed to library) developer, and I can’t remember a single instance where I really wanted to have GATs.
+This is a consequences of my overall code style — I try to use abstraction sparingly and rarely reach out for traits.
+I don’t think I’ve ever build a meaningful abstraction which was expressed via traits?
+On the contrary, I try hard to make everything concrete and non-generic on the language level.</p>
+
+<p>What’s more, when I do reach out for traits, most of the time this is to use trait objects, which give me a new runtime capability to use different, substitutable concrete type.
+For the static,monomorphization based subset of traits I find that most of the time non-trait solution seem to work.</p>
+
+<p>And I think GATs (and associated types in general) don’t work with trait objects, which probably explains why, even when I use traits, I don’t generally need GATs.
+Though, it seems to me that lifetime-only subset of GATs actually works with trait objects?
+That is, lending iterator seems to be object safe?</p>
+
+<p>I guess, the only place where I do, indirectly, want GATs is to make <code>async trait</code> work, but even then, I usually am interested in object-safe async traits, which I think don’t need and can’t use GATs?</p>
+<hr />
+<p>Another disconnection between my usage of Rust and discussion surrounding the GATs is in one of the prominent examples — parser combinator library.
+In practice, for me parser combinator’s primary use-case was always a vehicle for teaching advanced types (eg, the monads paper uses parsers as one of the examples).
+For production use-cases I’ve encountered, it was always either a hand-written parser, or a full-blown parser generator.</p>
+]]></content>
+</entry>
+
+</feed>
